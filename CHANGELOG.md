@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Saved worker connection**: with no `host`, `KOSA8_HOST` or `socketPath`, the client uses the
+  connection the CLI saved in `~/.kosa8/worker.json` (`kosa8 wsl setup`, `kosa8 worker join`), so it
+  works on Windows by default. Its token goes only to its host; its `"insecure": true` allows plain
+  http to a LAN address. `Builder.workerFile(Path)` moves it, `null` reads none;
+  `Endpoint.resolve(..., workerFile)` is the six-argument form.
+- **Windows**: an unreachable default socket says to run `kosa8 wsl setup` or set `KOSA8_HOST`;
+  mount host paths starting with `/` (WSL paths) are accepted on Windows; `test.sh` picks the
+  classpath separator; CI runs the unit tests on Ubuntu, macOS and Windows.
 - **kosa8 Cloud**: `Kosa8Cloud` (builder: `apiKey` / `KOSA8_API_KEY`, `baseUrl` / `KOSA8_CLOUD_URL`, `timeout`)
   talks to the cloud control plane over `java.net.http`, matching the Python and TypeScript SDKs.
   `sandboxes()`: `create`, `list`, `get` returning `CloudSandbox` (`exec` → `CloudExecResult`, `sleep`, `wake`,

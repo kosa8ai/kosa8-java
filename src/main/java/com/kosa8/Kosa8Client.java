@@ -3,6 +3,7 @@ package com.kosa8;
 import com.kosa8.Transport.Request;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -57,6 +58,7 @@ public final class Kosa8Client {
     private Duration timeout;
     private CheckpointStore checkpoints;
     private Function<String, String> getenv = System::getenv;
+    private Path workerFile = Endpoint.defaultWorkerFile();
 
     /** Default ~/.kosa8/run/kosa8.sock. */
     public Builder socketPath(String v) { socketPath = v; return this; }
@@ -75,11 +77,17 @@ public final class Kosa8Client {
     public Builder timeout(Duration v) { timeout = v; return this; }
     /** Where checkpoint stacks live; default the CLI's own ~/.kosa8/checkpoints.json. */
     public Builder checkpoints(CheckpointStore v) { checkpoints = v; return this; }
+    /**
+     * The saved worker connection read when neither a host, KOSA8_HOST nor a socket path is set;
+     * default ~/.kosa8/worker.json (written by {@code kosa8 wsl setup} and {@code kosa8 worker join}).
+     * null reads none.
+     */
+    public Builder workerFile(Path v) { workerFile = v; return this; }
     /** For tests. */
     public Builder getenv(Function<String, String> v) { getenv = v; return this; }
 
     public Kosa8Client build() {
-      Endpoint ep = Endpoint.resolve(host, socketPath, token, insecure, getenv);
+      Endpoint ep = Endpoint.resolve(host, socketPath, token, insecure, getenv, workerFile);
       String agent = agentToken != null ? agentToken : getenv.apply("KOSA8_AGENT_TOKEN");
       return new Kosa8Client(new Transport(ep, actor, agent, headers, timeout),
           checkpoints != null ? checkpoints : new FileCheckpointStore());

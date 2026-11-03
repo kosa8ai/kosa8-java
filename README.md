@@ -29,6 +29,14 @@ java.net.http cannot talk over a unix socket, so the SDK speaks HTTP/1.1 itself 
 | `actor` | `tool` (`human`, `agent`, `tool`), sent as `X-Kosa8-Actor` |
 | `agentToken` / `KOSA8_AGENT_TOKEN` | sent as `X-Kosa8-Agent-Token` |
 | `timeout` | none; per call with `Options.Run.timeout` |
+| `workerFile` | `~/.kosa8/worker.json`; `null` reads none |
+
+Without a `host` or `KOSA8_HOST`, and with no `socketPath` given, the client follows the
+connection the CLI saved in `~/.kosa8/worker.json` (written by `kosa8 wsl setup` on Windows, where
+the engine runs in WSL2, and by `kosa8 worker join` on any OS): its `host`, with its `token` unless
+you pass `token`, and its `"insecure": true` allowing plain http to a LAN address. A saved token is
+never sent to a host from `host` or `KOSA8_HOST`. A missing or malformed file, or a blank `host`,
+means the local socket. `client.endpoint().target()` shows where requests go.
 
 ## kosa8 Cloud
 

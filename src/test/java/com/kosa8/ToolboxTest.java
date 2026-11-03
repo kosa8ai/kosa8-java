@@ -261,7 +261,7 @@ public final class ToolboxTest extends ClientTest {
     Files.writeString(ctx.resolve("build/out"), "x");
     Files.writeString(ctx.resolve("secretive.txt"), "kept: only the folder secret is ignored");
     Files.writeString(ctx.resolve("app.py"), "print(1)");
-    Files.setPosixFilePermissions(ctx.resolve("app.py"), PosixFilePermissions.fromString("rwxr-xr-x"));
+    if (!Transport.WINDOWS) Files.setPosixFilePermissions(ctx.resolve("app.py"), PosixFilePermissions.fromString("rwxr-xr-x"));
     String deep = "d".repeat(60) + "/" + "e".repeat(60) + "/" + "f".repeat(90) + ".txt"; // 213 bytes: ustar prefix split
     Files.createDirectories(ctx.resolve(deep).getParent());
     Files.writeString(ctx.resolve(deep), "deep");

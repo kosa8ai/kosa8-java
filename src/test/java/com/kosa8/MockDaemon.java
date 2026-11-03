@@ -65,7 +65,8 @@ final class MockDaemon implements AutoCloseable {
   private final Thread acceptor;
 
   MockDaemon() throws IOException {
-    dir = Files.createTempDirectory(Path.of("/tmp"), "k8j");
+    // /tmp keeps the socket path short (macOS's temp dir is long); Windows has no /tmp but takes AF_UNIX in its temp dir.
+    dir = Transport.WINDOWS ? Files.createTempDirectory("k8j") : Files.createTempDirectory(Path.of("/tmp"), "k8j");
     socketPath = dir.resolve("k.sock").toString();
     server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
     server.bind(UnixDomainSocketAddress.of(socketPath));

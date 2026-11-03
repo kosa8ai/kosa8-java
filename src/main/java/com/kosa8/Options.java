@@ -94,7 +94,7 @@ public final class Options {
           }
           if (p.length != 2 || p[0].isEmpty() || p[1].isEmpty())
             throw new Kosa8Exception("mount \"" + m + "\": want host:guest or host:guest:ro");
-          if (!java.nio.file.Path.of(p[0]).isAbsolute() || !p[1].startsWith("/"))
+          if (!(p[0].startsWith("/") || java.nio.file.Path.of(p[0]).isAbsolute()) || !p[1].startsWith("/"))
             throw new Kosa8Exception("mount \"" + m + "\": both paths must be absolute (use Path.toAbsolutePath() for the host side)");
           Map<String, Object> o = new LinkedHashMap<>();
           o.put("host_path", p[0]);
