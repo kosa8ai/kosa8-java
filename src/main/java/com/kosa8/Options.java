@@ -33,7 +33,8 @@ public final class Options {
     List<String> mounts;
     String egress;
     List<String> egressAllow;
-    Boolean capture;
+    String capturePath;
+    boolean captureBool;
     Map<String, String> labels;
     Object broker;
 
@@ -47,7 +48,16 @@ public final class Options {
     public Create egress(String v) { egress = v; return this; }
     /** Limit the network to these hosts (sets egress to allow:…). */
     public Create egressAllow(List<String> v) { egressAllow = v; return this; }
-    public Create capture(boolean v) { capture = v; return this; }
+    /**
+     * Record the sandbox's network traffic as pcap segments in this host directory.
+     */
+    public Create capture(String hostDir) { capturePath = hostDir; return this; }
+    /**
+     * @deprecated the daemon needs a directory to write to; use {@link #capture(String)}.
+     *     {@code capture(true)} now fails before the request instead of with a 500.
+     */
+    @Deprecated
+    public Create capture(boolean v) { captureBool = v; return this; }
     public Create labels(Map<String, String> v) { labels = v; return this; }
     /** The credential-broker config, passed through. */
     public Create broker(Object v) { broker = v; return this; }
@@ -58,7 +68,25 @@ public final class Options {
       if (cpus != null) b.put("cpus", cpus);
       if (memMb != null) b.put("mem_mb", memMb);
       if (diskGb != null) b.put("disk_gb", diskGb);
-      if (mounts != null) b.put("mounts", mounts);
+      if (mounts != null) {
+        List<Map<String, Object>> ms = new ArrayList<>();
+        for (String m : mounts) {
+          String[] p = m.split(":", -1);
+          boolean ro = false;
+          if (p.length == 3 && (p[2].equals("ro") || p[2].equals("rw"))) {
+            ro = p[2].equals("ro");
+            p = new String[] {p[0], p[1]};
+          }
+          if (p.length != 2 || p[0].isEmpty() || p[1].isEmpty())
+            throw new Kosa8Exception("mount \"" + m + "\": want host:guest or host:guest:ro");
+          Map<String, Object> o = new LinkedHashMap<>();
+          o.put("host_path", p[0]);
+          o.put("guest_path", p[1]);
+          o.put("read_only", ro);
+          ms.add(o);
+        }
+        b.put("mounts", ms);
+      }
       if (egressAllow != null && !egressAllow.isEmpty()) {
         if (egress != null && !egress.equals("deny"))
           throw new Kosa8Exception("egressAllow already limits the network to the hosts it lists; do not also set egress");
@@ -68,7 +96,13 @@ public final class Options {
       } else if (egress != null) {
         b.put("egress", egress);
       }
-      if (capture != null) b.put("capture", capture);
+      if (capturePath != null) {
+        if (capturePath.isEmpty()) throw new Kosa8Exception("capture needs a host directory for the pcap segments");
+        b.put("capture", Map.of("path", capturePath));
+      } else if (captureBool) {
+        throw new Kosa8Exception("capture(true) is not enough: the daemon needs a host directory for the pcap "
+            + "segments; use capture(\"/path/to/dir\")");
+      }
       if (labels != null) b.put("labels", labels);
       if (broker != null) b.put("broker", broker);
       return b;

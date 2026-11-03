@@ -68,6 +68,13 @@ public record Endpoint(String socketPath, String scheme, String host, int port, 
 
   static String nz(String s) { return s == null ? "" : s; }
 
+  /** Never prints the token: an Endpoint ends up in logs and exception messages. */
+  @Override
+  public String toString() {
+    return "Endpoint[" + (socketPath != null ? "unix://" + socketPath : scheme + "://" + host + ":" + port + nz(basePath))
+        + (token != null ? ", token=***" : "") + "]";
+  }
+
   /** For tests: an environment from a map. */
   static Function<String, String> env(Map<String, String> m) { return m::get; }
 }

@@ -29,13 +29,14 @@ import java.util.regex.Pattern;
  * }</pre>
  */
 public final class Kosa8Client {
-  public static final String VERSION = "0.1.0";
+  public static final String VERSION = "0.1.1";
   private static final Pattern TRANSIENT = Pattern.compile(
       "connection refused|EOF|connection reset|broken pipe|no such file or directory|stream ended|ECONNREFUSED|ECONNRESET|unreachable",
       Pattern.CASE_INSENSITIVE);
 
   private final Transport t;
   private final CheckpointBook ckpts;
+  private final java.util.Set<String> stdinSent = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
   private Kosa8Client(Transport t, CheckpointStore store) {
     this.t = t;
@@ -241,6 +242,11 @@ public final class Kosa8Client {
   /** POST …/exec: run a command in a running container of the sandbox. */
   public Results.Exec exec(String sandbox, String container, List<String> args, Options.Run o) {
     if (o == null) o = new Options.Run();
+    if (o.env != null && !o.env.isEmpty())
+      // The daemon's exec takes no environment; dropping it silently would run
+      // the command without the variables the caller asked for.
+      throw new Kosa8Exception("exec does not take env: the container keeps the environment it was started with. "
+          + "Set it at startInteractive, or wrap the command: List.of(\"env\", \"K=V\", \"cmd\")");
     return collect(execReq(sandbox, container, args).approval(o.approval).timeout(o.timeout), o);
   }
 
@@ -264,12 +270,25 @@ public final class Kosa8Client {
 
   /** POST …/containers/{cid}/stdin: stream bytes into the container's stdin (sent chunked). */
   public Map<String, Object> writeStdin(String sandbox, String container, InputStream data, Options.Approval o) {
+    stdinOnce(sandbox, container);
     return obj(t.json(new Request("POST", sb(sandbox, "containers", Transport.enc(container), "stdin")).body(data).approval(appr(o))));
   }
 
   /** POST …/containers/{cid}/stdin with a fixed body. */
   public Map<String, Object> writeStdin(String sandbox, String container, byte[] data, Options.Approval o) {
+    stdinOnce(sandbox, container);
     return obj(t.json(new Request("POST", sb(sandbox, "containers", Transport.enc(container), "stdin")).body(data).approval(appr(o))));
+  }
+
+  /**
+   * The request body is the container's whole stdin: the daemon closes stdin when it
+   * ends, so writeStdin can be called once per container. Pass an InputStream that
+   * yields over time (a PipedInputStream) to feed input as you go.
+   */
+  private void stdinOnce(String sandbox, String container) {
+    if (!stdinSent.add(sandbox + "\u0000" + container))
+      throw new Kosa8Exception("stdin of container " + container + " in " + sandbox + " was already sent and is closed: "
+          + "the daemon treats one writeStdin body as the whole of stdin. Pass an InputStream to stream input");
   }
 
   /** POST …/containers/{cid}/attach: follow a container's output until it exits. */
@@ -468,7 +487,22 @@ public final class Kosa8Client {
    */
   public Results.CheckpointSaved checkpoint(String sandbox, String label, Options.Approval o) {
     CheckpointBook.Next next = ckpts.nextId(sandbox);
-    Map<String, Object> snap = snapshot(sandbox, new Options.Snapshot().id(next.id()).approval(appr(o)));
+    // Two checkpoints taken at once (here or by the CLI) can pick the same next
+    // id; the loser's snapshot is refused with 409. The winner records its id only
+    // once its snapshot is done, so step past the taken id rather than re-reading.
+    String id = next.id();
+    Map<String, Object> snap;
+    for (int attempt = 0; ; attempt++) {
+      try {
+        snap = snapshot(sandbox, new Options.Snapshot().id(id).approval(appr(o)));
+        break;
+      } catch (Kosa8Exception.ConflictException e) {
+        String dm = e.daemonMessage() == null ? e.getMessage() : e.daemonMessage();
+        if (attempt == 9 || dm == null || !dm.contains("already exists")) throw e;
+        id = sandbox + "-ckpt-" + (CheckpointBook.seq(id, sandbox) + 1);
+      }
+    }
+    next = new CheckpointBook.Next(id, next.evict());
     for (String old : next.evict()) {
       try {
         deleteSnapshot(old, new Options.SnapshotDelete().approval(appr(o)));
@@ -499,8 +533,8 @@ public final class Kosa8Client {
     try {
       restored = restoreSnapshot(target.id(), new Options.Restore().name(sandbox).approval(appr(o)));
     } catch (Kosa8Exception e) {
-      throw new Kosa8Exception.CheckpointException("restore failed and " + sandbox + " is now stopped: " + e.getMessage()
-          + " — recover with restoreSnapshot(\"" + target.id() + "\", new Options.Restore().name(\"" + sandbox + "\"))", e);
+      throw new Kosa8Exception.CheckpointException("restore failed and " + sandbox + " no longer exists (it was deleted to free its name for the "
+          + "restore): " + e.getMessage() + " — the checkpoint is intact; recover with restoreSnapshot(\"" + target.id() + "\", new Options.Restore().name(\"" + sandbox + "\"))", e);
     }
     List<String> dropped = List.of();
     try {

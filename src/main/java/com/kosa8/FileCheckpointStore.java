@@ -19,6 +19,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.channels.OverlappingFileLockException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 /**
@@ -37,7 +41,20 @@ public final class FileCheckpointStore implements CheckpointStore {
     this(Path.of(System.getProperty("user.home"), ".kosa8", "checkpoints.json"));
   }
 
-  public FileCheckpointStore(Path path) { this.path = path; }
+  public FileCheckpointStore(Path path) { this(path, java.time.Duration.ofSeconds(10)); }
+
+  /** lockTimeout: how long to wait for checkpoints.json.lock (10 s by default, as @kosa8/sdk). */
+  public FileCheckpointStore(Path path, java.time.Duration lockTimeout) {
+    this.path = path;
+    this.lockTimeout = lockTimeout;
+  }
+
+  private final java.time.Duration lockTimeout;
+
+  // A JVM may hold only one FileLock per file: a second FileCheckpointStore on the
+  // same path (two clients) would get OverlappingFileLockException. Every store
+  // on a path serialises on one in-process lock before taking the file lock.
+  private static final ConcurrentHashMap<Path, ReentrantLock> JVM_LOCKS = new ConcurrentHashMap<>();
 
   public Path path() { return path; }
 
@@ -95,12 +112,20 @@ public final class FileCheckpointStore implements CheckpointStore {
   private static String str(Object o) { return o == null ? "" : o.toString(); }
 
   @Override
-  public synchronized <T> T update(Function<Map<String, List<Checkpoint>>, T> fn) {
+  public <T> T update(Function<Map<String, List<Checkpoint>>, T> fn) {
+    long deadline = System.nanoTime() + lockTimeout.toNanos();
+    ReentrantLock jvm = JVM_LOCKS.computeIfAbsent(path.toAbsolutePath().normalize(), k -> new ReentrantLock());
+    try {
+      if (!jvm.tryLock(lockTimeout.toNanos(), TimeUnit.NANOSECONDS)) throw lockTimedOut();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new Kosa8Exception.CheckpointException("interrupted waiting for " + path + ".lock", e);
+    }
     try {
       Files.createDirectories(path.getParent());
       try (FileChannel lock = FileChannel.open(path.resolveSibling(path.getFileName() + ".lock"),
               StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-          FileLock ignored = lock.lock()) {
+          FileLock ignored = acquire(lock, deadline)) {
         Map<String, List<Checkpoint>> d = load();
         T r = fn.apply(d);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -121,6 +146,32 @@ public final class FileCheckpointStore implements CheckpointStore {
       }
     } catch (IOException e) {
       throw new Kosa8Exception.CheckpointException("update the checkpoint store " + path + ": " + e.getMessage(), e);
+    } finally {
+      jvm.unlock();
     }
+  }
+
+  private FileLock acquire(FileChannel ch, long deadline) throws IOException {
+    while (true) {
+      FileLock l;
+      try {
+        l = ch.tryLock();
+      } catch (OverlappingFileLockException e) {
+        l = null; // held elsewhere in this JVM outside a FileCheckpointStore
+      }
+      if (l != null) return l;
+      if (System.nanoTime() >= deadline) throw lockTimedOut();
+      try {
+        Thread.sleep(50);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new Kosa8Exception.CheckpointException("interrupted waiting for " + path + ".lock", e);
+      }
+    }
+  }
+
+  private Kosa8Exception.CheckpointException lockTimedOut() {
+    return new Kosa8Exception.CheckpointException("timed out after " + lockTimeout.toSeconds() + "s waiting for "
+        + path + ".lock; another kosa8 process is holding it");
   }
 }

@@ -24,6 +24,19 @@ public final class Sandbox {
   public Results.Exec run(String image, List<String> args) { return c.run(id, image, args); }
   public String startContainer(String image, List<String> args) { return c.startContainer(id, image, args); }
   public Results.Exec exec(String container, List<String> args, Options.Run o) { return c.exec(id, container, args, o); }
+  public void execFrames(String container, List<String> args, java.util.function.Consumer<Frame> fn, Options.Approval o) {
+    c.execFrames(id, container, args, fn, o);
+  }
+  public String startInteractive(String image, List<String> args, Options.Interactive o) {
+    return c.startInteractive(id, image, args, o);
+  }
+  public Map<String, Object> writeStdin(String container, java.io.InputStream data, Options.Approval o) {
+    return c.writeStdin(id, container, data, o);
+  }
+  public Map<String, Object> writeStdin(String container, byte[] data, Options.Approval o) {
+    return c.writeStdin(id, container, data, o);
+  }
+  public Results.Exec attach(String container, Options.Run o) { return c.attach(id, container, o); }
   public List<Map<String, Object>> containers() { return c.sandboxContainers(id); }
   public List<String> images() { return c.sandboxImages(id); }
   public Map<String, Object> egress() { return c.sandboxEgress(id); }

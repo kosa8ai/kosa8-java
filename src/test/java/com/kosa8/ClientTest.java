@@ -270,6 +270,56 @@ public final class ClientTest {
         () -> k.run("sb", "alpine", List.of(), new Options.Run().timeout(Duration.ofMillis(300))));
   }
 
+  @SuppressWarnings("unchecked")
+  public void testFixesMountsCaptureExecEnvStdin() {
+    d.on("POST", "/kosa8/v1/sandboxes", r -> MockDaemon.json(201, Map.of("ok", true)));
+    k.createSandbox(new Options.Create().mounts(List.of("/src:/work:ro", "/d:/d")).capture("/tmp/pcap"));
+    Map<String, Object> b = d.last().json();
+    List<Map<String, Object>> ms = (List<Map<String, Object>>) b.get("mounts");
+    eq("/work", ms.get(0).get("guest_path"), "guest path");
+    eq(true, ms.get(0).get("read_only"), "ro");
+    eq(false, ms.get(1).get("read_only"), "rw");
+    eq("/tmp/pcap", ((Map<String, Object>) b.get("capture")).get("path"), "capture path");
+    raises(Kosa8Exception.class, () -> k.createSandbox(new Options.Create().mounts(List.of("nocolon"))));
+    raises(Kosa8Exception.class, () -> k.exec("s", "c", List.of("true"), new Options.Run().env(List.of("A=1"))));
+    d.on("POST", "/kosa8/v1/sandboxes/s/containers/c/stdin", r -> MockDaemon.json(200, Map.of("ok", true)));
+    eq(true, k.writeStdin("s", "c", "hi\n".getBytes(StandardCharsets.UTF_8), null).get("ok"), "first stdin");
+    raises(Kosa8Exception.class, () -> k.writeStdin("s", "c", "again\n".getBytes(StandardCharsets.UTF_8), null));
+  }
+
+  public void testFixesCheckpointCollisionStepsId() {
+    AtomicInteger calls = new AtomicInteger();
+    d.on("POST", "/kosa8/v1/sandboxes/s/snapshot", r -> calls.incrementAndGet() == 1
+        ? MockDaemon.json(409, Map.of("error", "snapshot already exists: s-ckpt-1"))
+        : MockDaemon.json(201, Map.of("id", r.json().get("id"))));
+    eq("s-ckpt-2", k.checkpoint("s", "a").checkpoint().id(), "stepped id");
+    d.on("POST", "/kosa8/v1/sandboxes/t/snapshot", r -> MockDaemon.json(409, Map.of("error", "sandbox busy")));
+    raises(Kosa8Exception.ConflictException.class, () -> k.checkpoint("t", ""));
+  }
+
+  public void testFixesTwoStoresOneFileAndRedactedToken() throws Exception {
+    Path f = Files.createTempDirectory("k8j").resolve("checkpoints.json");
+    FileCheckpointStore a = new FileCheckpointStore(f), b = new FileCheckpointStore(f);
+    List<Throwable> errs = Collections.synchronizedList(new ArrayList<>());
+    List<Thread> ts = new ArrayList<>();
+    for (int i = 0; i < 8; i++) {
+      FileCheckpointStore s = i % 2 == 0 ? a : b;
+      Thread t = new Thread(() -> {
+        try {
+          for (int j = 0; j < 20; j++) s.update(m -> null);
+        } catch (Throwable e) {
+          errs.add(e);
+        }
+      });
+      ts.add(t);
+      t.start();
+    }
+    for (Thread t : ts) t.join();
+    check(errs.isEmpty(), "two stores on one file: " + errs);
+    Endpoint e = Endpoint.resolve("https://w.example:443", null, "sekret", false, x -> null);
+    check(!e.toString().contains("sekret"), "token redacted: " + e);
+  }
+
   public static void main(String[] args) throws Exception {
     int pass = 0;
     List<String> failed = new ArrayList<>();
