@@ -13,7 +13,7 @@ Fixes found while writing and testing the docs at https://docs.kosa8.com/guides/
 - **`Options.Create.mounts` works.** The `host:guest[:ro]` strings are sent as the objects
   the daemon takes; 0.1.0 sent strings and every mount was refused with
   `500 mount has no guest path`.
-- **`Options.Create.capture(String hostDir)`** records traffic to that directory.
+- **`Options.Create.capture(String hostFile)`** records traffic to that file (pcapng).
   `capture(boolean)` is deprecated: `capture(true)` always failed with
   `500 capture: no output path` and now fails before the request with an explanation.
 - **`exec` with `Options.Run.env` throws `Kosa8Exception`** instead of silently running

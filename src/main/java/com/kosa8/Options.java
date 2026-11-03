@@ -49,11 +49,11 @@ public final class Options {
     /** Limit the network to these hosts (sets egress to allow:…). */
     public Create egressAllow(List<String> v) { egressAllow = v; return this; }
     /**
-     * Record the sandbox's network traffic as pcap segments in this host directory.
+     * Record the sandbox's network traffic to this host file (daemon 0.9.36 writes one pcapng file there).
      */
-    public Create capture(String hostDir) { capturePath = hostDir; return this; }
+    public Create capture(String hostFile) { capturePath = hostFile; return this; }
     /**
-     * @deprecated the daemon needs a directory to write to; use {@link #capture(String)}.
+     * @deprecated the daemon needs a file to write to; use {@link #capture(String)}.
      *     {@code capture(true)} now fails before the request instead of with a 500.
      */
     @Deprecated
@@ -97,11 +97,11 @@ public final class Options {
         b.put("egress", egress);
       }
       if (capturePath != null) {
-        if (capturePath.isEmpty()) throw new Kosa8Exception("capture needs a host directory for the pcap segments");
+        if (capturePath.isEmpty()) throw new Kosa8Exception("capture needs a host file path to write the capture to");
         b.put("capture", Map.of("path", capturePath));
       } else if (captureBool) {
-        throw new Kosa8Exception("capture(true) is not enough: the daemon needs a host directory for the pcap "
-            + "segments; use capture(\"/path/to/dir\")");
+        throw new Kosa8Exception("capture(true) is not enough: the daemon needs a host file to write "
+            + "the capture to; use capture(\"/path/to/capture.pcapng\")");
       }
       if (labels != null) b.put("labels", labels);
       if (broker != null) b.put("broker", broker);
