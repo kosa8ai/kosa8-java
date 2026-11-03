@@ -16,13 +16,78 @@
       <url>https://opensource.org/licenses/MIT</url>
     </license>
   </licenses>
+  <developers>
+    <developer>
+      <name>kosa8</name>
+      <email>release@kosa8.com</email>
+      <organization>kosa8</organization>
+      <organizationUrl>https://kosa8.com</organizationUrl>
+    </developer>
+  </developers>
   <scm>
     <url>https://github.com/kosa8ai/kosa8-java</url>
+    <connection>scm:git:https://github.com/kosa8ai/kosa8-java.git</connection>
+    <developerConnection>scm:git:https://github.com/kosa8ai/kosa8-java.git</developerConnection>
   </scm>
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- Tests are a dependency-free harness: ./test.sh -->
     <maven.test.skip>true</maven.test.skip>
+    <gpg.keyname>E10DF48761152055761CD4252DA185688CA71BF2</gpg.keyname>
   </properties>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>3.3.1</version>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <goals><goal>jar-no-fork</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.11.2</version>
+        <configuration>
+          <doclint>none</doclint>
+          <quiet>true</quiet>
+        </configuration>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals><goal>jar</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-gpg-plugin</artifactId>
+        <version>3.2.7</version>
+        <executions>
+          <execution>
+            <id>sign-artifacts</id>
+            <phase>verify</phase>
+            <goals><goal>sign</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.sonatype.central</groupId>
+        <artifactId>central-publishing-maven-plugin</artifactId>
+        <version>0.12.0</version>
+        <extensions>true</extensions>
+        <configuration>
+          <publishingServerId>central</publishingServerId>
+          <autoPublish>true</autoPublish>
+          <waitUntil>published</waitUntil>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>
