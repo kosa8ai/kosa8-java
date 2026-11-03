@@ -281,6 +281,7 @@ public final class ClientTest {
     eq(false, ms.get(1).get("read_only"), "rw");
     eq("/tmp/pcap", ((Map<String, Object>) b.get("capture")).get("path"), "capture path");
     raises(Kosa8Exception.class, () -> k.createSandbox(new Options.Create().mounts(List.of("nocolon"))));
+    raises(Kosa8Exception.class, () -> k.createSandbox(new Options.Create().mounts(List.of("rel/dir:/work"))));
     raises(Kosa8Exception.class, () -> k.exec("s", "c", List.of("true"), new Options.Run().env(List.of("A=1"))));
     d.on("POST", "/kosa8/v1/sandboxes/s/containers/c/stdin", r -> MockDaemon.json(200, Map.of("ok", true)));
     eq(true, k.writeStdin("s", "c", "hi\n".getBytes(StandardCharsets.UTF_8), null).get("ok"), "first stdin");

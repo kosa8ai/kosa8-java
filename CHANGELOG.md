@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 — 2026-11-03
+
+- **`capture(String hostFile)` is documented as the host file the capture is written to**
+  (pcapng), not a directory; the errors for `capture("")` and the deprecated
+  `capture(true)` say so too. 0.1.1's jar still said "host directory".
+- **Mounts must use absolute paths on both sides**; a relative one throws
+  `Kosa8Exception` before the request.
+
 ## 0.1.1 — 2026-11-03
 
 Fixes found while writing and testing the docs at https://docs.kosa8.com/guides/java-guide/.
