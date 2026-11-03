@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **kosa8 Cloud**: `Kosa8Cloud` (builder: `apiKey` / `KOSA8_API_KEY`, `baseUrl` / `KOSA8_CLOUD_URL`, `timeout`)
+  talks to the cloud control plane over `java.net.http`, matching the Python and TypeScript SDKs.
+  `sandboxes()`: `create`, `list`, `get` returning `CloudSandbox` (`exec` → `CloudExecResult`, `sleep`, `wake`,
+  `refresh`, `delete`); `functions()`: `deploy`, `list`, `get`, `delete`, `invoke`, `map`; `me`, `usage`.
+  Keys must start with `k8c_live_`; plain http only to loopback; `toString()` never shows the key.
+- **Errors**: `Kosa8Exception.code()` carries the cloud's stable error code; new
+  `PaymentRequiredException` (402) and `RateLimitException` (429), mapped like the other statuses.
+
 ## 0.2.0 — 2026-11-03
 
 The sandbox toolbox of daemon 0.13, matching the Python SDK's.

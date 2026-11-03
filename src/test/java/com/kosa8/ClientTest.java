@@ -325,7 +325,7 @@ public class ClientTest {
     int pass = 0;
     List<String> failed = new ArrayList<>();
     List<Method> tests = new ArrayList<>();
-    for (Class<?> c : List.of(ClientTest.class, ToolboxTest.class)) tests.addAll(List.of(c.getDeclaredMethods()));
+    for (Class<?> c : List.of(ClientTest.class, ToolboxTest.class, CloudTest.class)) tests.addAll(List.of(c.getDeclaredMethods()));
     for (Method m : tests) {
       if (!m.getName().startsWith("test")) continue;
       ClientTest t = (ClientTest) m.getDeclaringClass().getDeclaredConstructor().newInstance();

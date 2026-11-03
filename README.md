@@ -30,11 +30,48 @@ java.net.http cannot talk over a unix socket, so the SDK speaks HTTP/1.1 itself 
 | `agentToken` / `KOSA8_AGENT_TOKEN` | sent as `X-Kosa8-Agent-Token` |
 | `timeout` | none; per call with `Options.Run.timeout` |
 
+## kosa8 Cloud
+
+The same sandboxes on kosa8 Cloud instead of the local daemon. Make an API
+key in the cloud dashboard and set `KOSA8_API_KEY`.
+
+```java
+Kosa8Cloud cloud = Kosa8Cloud.builder().build();  // or .apiKey("k8c_live_...")
+
+CloudSandbox box = cloud.sandboxes().create("python", null, 600); // template, region, sleepAfterS
+CloudExecResult r = box.exec(List.of("python3", "-c", "print(6 * 7)"));
+System.out.println(r.exitCode() + " " + r.stdout());      // 0 42
+box.sleep();                                              // costs only snapshot storage while asleep
+box.exec("ls /workspace");                                // wakes it, files and all
+box.delete();
+
+cloud.functions().deploy("hello", Map.of(
+    "runtime", "python3.12",
+    "code", "def handler(event):\n    return {\"hello\": event.get(\"name\", \"world\")}\n"));
+Map<String, Object> out = cloud.functions().invoke("hello", Map.of("name", "kosa8"));
+System.out.println(out.get("ok") + " " + out.get("result")); // true {hello=kosa8}
+```
+
+| Builder method | Default |
+|---|---|
+| `apiKey` / `KOSA8_API_KEY` | required; starts with `k8c_live_` |
+| `baseUrl` / `KOSA8_CLOUD_URL` | `https://api.kosa8.cloud`; `https` only, except `localhost`, `127.0.0.1` and `::1` |
+| `timeout` | 120 s per request |
+
+Also: `cloud.me()`, `cloud.usage()`, `sandboxes().list(all)` / `get(id)`, `box.wake()` / `refresh()`,
+`functions().list()` / `get` / `delete` / `map(name, events, concurrency)`.
+
+A new organization runs nothing until a payment method is on file; until
+then creating a sandbox throws `Kosa8Exception.PaymentRequiredException` (`code()`
+`payment_required`), whose message says what to do. Every error from the
+cloud carries its stable `code()`; 429 is `RateLimitException`.
+
 ## Errors
 
 All exceptions are unchecked and extend `Kosa8Exception`, carrying the daemon's message and remediation:
 `ConnectionException`, `ApiException` › (`BadRequestException`, `AuthException`, `PolicyException` › `ApprovalRequiredException`
-(`approval()`), `NotFoundException`, `ConflictException`, `UnsupportedException`), `StreamException` (`stdout()`/`stderr()` so far),
+(`approval()`), `NotFoundException`, `ConflictException`, `UnsupportedException`, and from kosa8 Cloud
+`PaymentRequiredException` (402) and `RateLimitException` (429)), `StreamException` (`stdout()`/`stderr()` so far),
 `CheckpointException`, `TimeoutException`. Calls a policy may gate take `.approval(sig)` on their options.
 
 ## API

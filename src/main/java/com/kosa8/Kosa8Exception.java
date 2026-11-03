@@ -13,6 +13,7 @@ public class Kosa8Exception extends RuntimeException {
   private final String method;
   private final String path;
   private final Object body;
+  private String code;
 
   public Kosa8Exception(String message) {
     this(message, 0, null, null, null, null, null, null);
@@ -43,6 +44,13 @@ public class Kosa8Exception extends RuntimeException {
   public String path() { return path; }
   /** The decoded response body. */
   public Object body() { return body; }
+  /** kosa8 Cloud's stable error code (payment_required, quota_exceeded, ...); null from the daemon. */
+  public String code() { return code; }
+
+  Kosa8Exception withCode(String c) {
+    code = c;
+    return this;
+  }
 
   /** The daemon is unreachable. */
   public static class ConnectionException extends Kosa8Exception {
@@ -91,9 +99,19 @@ public class Kosa8Exception extends RuntimeException {
     public NotFoundException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
+  /** 402: kosa8 Cloud refused new work until a payment method is on file. */
+  public static class PaymentRequiredException extends ApiException {
+    public PaymentRequiredException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
   /** 409 */
   public static class ConflictException extends ApiException {
     public ConflictException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** 429: too many requests, or a quota reached. */
+  public static class RateLimitException extends ApiException {
+    public RateLimitException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
   /** 501 */
@@ -130,19 +148,25 @@ public class Kosa8Exception extends RuntimeException {
   }
 
   /** The typed error for an HTTP error answer: the daemon's message with its remediation in parentheses. */
-  @SuppressWarnings("unchecked")
   static Kosa8Exception fromResponse(int status, Object body, String method, String path) {
+    return fromResponse(status, body, body, method, path);
+  }
+
+  /** As above, reading the message from msgBody while keeping body as {@link #body()}. */
+  @SuppressWarnings("unchecked")
+  static Kosa8Exception fromResponse(int status, Object msgBody, Object body, String method, String path) {
+    Object b0 = msgBody;
     String msg = null;
     String rem = null;
     Map<String, Object> approval = null;
-    if (body instanceof Map<?, ?> m) {
+    if (b0 instanceof Map<?, ?> m) {
       Object e = m.get("error");
       msg = e instanceof String s && !s.isEmpty() ? s : (m.get("message") instanceof String s2 ? s2 : null);
       if (m.get("remediation") instanceof String r && !r.isEmpty()) rem = r;
       if (status == 403 && m.get("approval") instanceof Map<?, ?> a && a.get("why") instanceof String) {
         approval = (Map<String, Object>) a;
       }
-    } else if (body instanceof String s && !s.isBlank()) {
+    } else if (b0 instanceof String s && !s.isBlank()) {
       msg = s.strip();
     }
     String base = msg != null && !msg.isEmpty() ? msg : "request failed with HTTP " + status;
@@ -152,8 +176,10 @@ public class Kosa8Exception extends RuntimeException {
       case 400 -> new BadRequestException(text, status, msg, rem, method, path, body);
       case 401 -> new AuthException(text, status, msg, rem, method, path, body);
       case 403 -> new PolicyException(text, status, msg, rem, method, path, body);
+      case 402 -> new PaymentRequiredException(text, status, msg, rem, method, path, body);
       case 404 -> new NotFoundException(text, status, msg, rem, method, path, body);
       case 409 -> new ConflictException(text, status, msg, rem, method, path, body);
+      case 429 -> new RateLimitException(text, status, msg, rem, method, path, body);
       case 501 -> new UnsupportedException(text, status, msg, rem, method, path, body);
       default -> new ApiException(text, status, msg, rem, method, path, body);
     };
