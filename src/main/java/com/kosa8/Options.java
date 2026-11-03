@@ -37,6 +37,11 @@ public final class Options {
     boolean captureBool;
     Map<String, String> labels;
     Object broker;
+    int autoStopMin;
+    int ttlMin;
+    int autoDeleteMin;
+    boolean ephemeral;
+    String template;
 
     public Create name(String v) { name = v; return this; }
     public Create cpus(int v) { cpus = v; return this; }
@@ -61,6 +66,16 @@ public final class Options {
     public Create labels(Map<String, String> v) { labels = v; return this; }
     /** The credential-broker config, passed through. */
     public Create broker(Object v) { broker = v; return this; }
+    /** Stop the sandbox after this many idle minutes. */
+    public Create autoStopMin(int v) { autoStopMin = v; return this; }
+    /** Stop it this many minutes after creation, busy or not. */
+    public Create ttlMin(int v) { ttlMin = v; return this; }
+    /** Delete it once it has been stopped this many minutes. */
+    public Create autoDeleteMin(int v) { autoDeleteMin = v; return this; }
+    /** Delete it whenever it stops. */
+    public Create ephemeral(boolean v) { ephemeral = v; return this; }
+    /** Start it with a template's image (see {@code Kosa8Client.buildTemplate}). */
+    public Create template(String v) { template = v; return this; }
 
     Map<String, Object> body() {
       Map<String, Object> b = new LinkedHashMap<>();
@@ -107,6 +122,11 @@ public final class Options {
       }
       if (labels != null) b.put("labels", labels);
       if (broker != null) b.put("broker", broker);
+      if (autoStopMin > 0) b.put("auto_stop_min", autoStopMin);
+      if (autoDeleteMin > 0) b.put("auto_delete_min", autoDeleteMin);
+      if (ttlMin > 0) b.put("ttl_min", ttlMin);
+      if (ephemeral) b.put("ephemeral", true);
+      if (template != null && !template.isEmpty()) b.put("template", template);
       return b;
     }
   }
@@ -211,5 +231,181 @@ public final class Options {
     public Explore prefix(String v) { prefix = v; return this; }
     /** False when the image is already in the sandbox. */
     public Explore pull(boolean v) { pull = v; return this; }
+  }
+
+  // --- toolbox ------------------------------------------------------------------
+
+  /** runCode. */
+  public static final class Code extends Call<Code> {
+    String language = "python";
+    String image;
+    Map<String, String> env;
+    Duration timeout;
+
+    /** python (default), javascript or typescript. */
+    public Code language(String v) { language = v; return this; }
+    /** The image to run it in; default the daemon's for the language. */
+    public Code image(String v) { image = v; return this; }
+    public Code env(Map<String, String> v) { env = v; return this; }
+    /** How long the snippet may run; the daemon kills it after (timedOut). */
+    public Code timeout(Duration v) { timeout = v; return this; }
+  }
+
+  /** writeFile. */
+  public static final class WriteFile extends Call<WriteFile> {
+    String mode;
+
+    /** Permission bits as octal text, such as "0755". */
+    public WriteFile mode(String v) { mode = v; return this; }
+  }
+
+  /** deleteFile. */
+  public static final class DeleteFile extends Call<DeleteFile> {
+    boolean recursive;
+
+    /** Remove a folder and everything in it. */
+    public DeleteFile recursive(boolean v) { recursive = v; return this; }
+  }
+
+  /** git: the fields of one op; unset ones are left out. */
+  public static final class Git extends Call<Git> {
+    final Map<String, Object> fields = new LinkedHashMap<>();
+    boolean addAll = true;
+
+    private Git put(String k, Object v) {
+      if (v == null) fields.remove(k);
+      else fields.put(k, v);
+      return this;
+    }
+
+    /** The repository, in the workspace. */
+    public Git path(String v) { return put("path", v); }
+    /** clone */
+    public Git url(String v) { return put("url", v); }
+    public Git branch(String v) { return put("branch", v); }
+    /** clone --depth */
+    public Git depth(int v) { return put("depth", v); }
+    /** push | pull; default origin. */
+    public Git remote(String v) { return put("remote", v); }
+    /** checkout -b */
+    public Git create(boolean v) { return put("create", v ? Boolean.TRUE : null); }
+    /** add: these paths instead of everything. */
+    public Git files(List<String> v) { return put("files", v); }
+    /** commit */
+    public Git message(String v) { return put("message", v); }
+    public Git authorName(String v) { return put("author_name", v); }
+    public Git authorEmail(String v) { return put("author_email", v); }
+    /** log: how many commits; default 20. */
+    public Git n(int v) { return put("n", v); }
+    /** diff --cached */
+    public Git staged(boolean v) { return put("staged", v ? Boolean.TRUE : null); }
+    /** For https remotes. */
+    public Git username(String v) { return put("username", v); }
+    public Git token(String v) { return put("token", v); }
+    /** The image git runs in. */
+    public Git image(String v) { return put("image", v); }
+    /** gitCommit only: stage everything first (default true). */
+    public Git addAll(boolean v) { addAll = v; return this; }
+
+    /** A copy, so the convenience methods can add their fields without changing the caller's. */
+    Git copy() {
+      Git g = new Git();
+      g.fields.putAll(fields);
+      g.addAll = addAll;
+      g.approval = approval;
+      return g;
+    }
+  }
+
+  /** createSession. */
+  public static final class Session extends Call<Session> {
+    String image;
+    Map<String, String> env;
+
+    public Session image(String v) { image = v; return this; }
+    public Session env(Map<String, String> v) { env = v; return this; }
+  }
+
+  /** sessionExec and shell. */
+  public static final class Shell extends Call<Shell> {
+    String session = "main";
+    Duration timeout;
+
+    /** shell only: the session to run in, made on first use; default "main". */
+    public Shell session(String v) { session = v; return this; }
+    /** How long the command may run; the daemon kills it after (timedOut). */
+    public Shell timeout(Duration v) { timeout = v; return this; }
+  }
+
+  /** startPty. */
+  public static final class Pty extends Call<Pty> {
+    String image;
+    List<String> command;
+    int cols;
+    int rows;
+    Map<String, String> env;
+
+    public Pty image(String v) { image = v; return this; }
+    /** Default a shell. */
+    public Pty command(List<String> v) { command = v; return this; }
+    /** The terminal size; both or neither. */
+    public Pty size(int cols, int rows) { this.cols = cols; this.rows = rows; return this; }
+    public Pty env(Map<String, String> v) { env = v; return this; }
+  }
+
+  /** createPreview. */
+  public static final class Preview extends Call<Preview> {
+    String session;
+    String container;
+    Duration expiresIn;
+
+    /** The session whose shell serves the port. */
+    public Preview session(String v) { session = v; return this; }
+    /** The container that serves the port. */
+    public Preview container(String v) { container = v; return this; }
+    /** How long the link works; default the daemon's. */
+    public Preview expiresIn(Duration v) { expiresIn = v; return this; }
+  }
+
+  /** setLifecycle: fields left unset keep their value; 0 turns one off. */
+  public static final class Lifecycle extends Call<Lifecycle> {
+    Integer autoStopMin;
+    Integer autoDeleteMin;
+    Integer ttlMin;
+    Boolean ephemeral;
+
+    public Lifecycle autoStopMin(int v) { autoStopMin = v; return this; }
+    public Lifecycle autoDeleteMin(int v) { autoDeleteMin = v; return this; }
+    public Lifecycle ttlMin(int v) { ttlMin = v; return this; }
+    public Lifecycle ephemeral(boolean v) { ephemeral = v; return this; }
+
+    Map<String, Object> body() {
+      Map<String, Object> b = new LinkedHashMap<>();
+      if (autoStopMin != null) b.put("auto_stop_min", autoStopMin);
+      if (autoDeleteMin != null) b.put("auto_delete_min", autoDeleteMin);
+      if (ttlMin != null) b.put("ttl_min", ttlMin);
+      if (ephemeral != null) b.put("ephemeral", ephemeral);
+      return b;
+    }
+  }
+
+  /** buildTemplate. */
+  public static final class Build extends Call<Build> {
+    String dockerfile = "Dockerfile";
+    Map<String, String> buildArgs;
+    String egress;
+    boolean replace;
+    Consumer<byte[]> onOutput;
+
+    /** Relative to the context folder; default Dockerfile. */
+    public Build dockerfile(String v) { dockerfile = v; return this; }
+    /** --build-arg K=V */
+    public Build buildArgs(Map<String, String> v) { buildArgs = v; return this; }
+    /** The build sandbox's network; default the daemon's (any). */
+    public Build egress(String v) { egress = v; return this; }
+    /** Build again over an existing template of that name. */
+    public Build replace(boolean v) { replace = v; return this; }
+    /** Build output and progress lines, as they arrive. */
+    public Build onOutput(Consumer<byte[]> v) { onOutput = v; return this; }
   }
 }

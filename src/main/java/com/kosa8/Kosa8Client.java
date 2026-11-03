@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  * }</pre>
  */
 public final class Kosa8Client {
-  public static final String VERSION = "0.1.2";
+  public static final String VERSION = "0.2.0";
   private static final Pattern TRANSIENT = Pattern.compile(
       "connection refused|EOF|connection reset|broken pipe|no such file or directory|stream ended|ECONNREFUSED|ECONNRESET|unreachable",
       Pattern.CASE_INSENSITIVE);
@@ -553,6 +553,362 @@ public final class Kosa8Client {
   }
 
   public Results.Rewind rewind(String sandbox, String to) { return rewind(sandbox, to, null); }
+
+  // --- toolbox: code, files, git, sessions, terminals, previews, lifecycle, templates
+
+  private static String str(Object o) { return o instanceof String s ? s : ""; }
+  private static long num(Object o) { return o instanceof Number n ? n.longValue() : 0; }
+  private static boolean bool(Object o) { return Boolean.TRUE.equals(o); }
+
+  /** A request timeout for a call whose run is limited to d: the run plus two minutes for the round trip. */
+  private static Duration slack(Duration d) { return d == null ? null : d.plusMinutes(2); }
+
+  private static double seconds(Duration d) { return d.toMillis() / 1000.0; }
+
+  /**
+   * POST …/code: run a Python, JavaScript or TypeScript snippet. It starts in /workspace;
+   * charts a Python snippet draws with matplotlib come back in artifacts as PNG bytes.
+   */
+  public Results.CodeResult runCode(String sandbox, String code, Options.Code o) {
+    if (o == null) o = new Options.Code();
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("language", o.language);
+    body.put("code", code);
+    if (o.image != null && !o.image.isEmpty()) body.put("image", o.image);
+    if (o.env != null && !o.env.isEmpty()) body.put("env", o.env);
+    if (o.timeout != null && !o.timeout.isZero()) body.put("timeout_s", seconds(o.timeout));
+    Map<String, Object> m = obj(t.json(new Request("POST", sb(sandbox, "code")).body(body).approval(o.approval).timeout(slack(o.timeout))));
+    List<Results.Artifact> arts = new ArrayList<>();
+    for (Map<String, Object> a : objs(m.get("artifacts")))
+      arts.add(new Results.Artifact(str(a.get("type")), str(a.get("name")), java.util.Base64.getDecoder().decode(str(a.get("data")))));
+    return new Results.CodeResult((int) num(m.get("exit")), str(m.get("stdout")), str(m.get("stderr")), str(m.get("language")),
+        str(m.get("image")), arts, num(m.get("duration_ms")), bool(m.get("timed_out")), bool(m.get("truncated")));
+  }
+
+  public Results.CodeResult runCode(String sandbox, String code) { return runCode(sandbox, code, null); }
+
+  private static Results.FileEntry entry(Map<String, Object> m) {
+    String link = str(m.get("link"));
+    return new Results.FileEntry(str(m.get("name")), str(m.get("path")), str(m.get("type")), num(m.get("size")),
+        (int) num(m.get("mode")), str(m.get("mod_time")), link.isEmpty() ? null : link);
+  }
+
+  /** GET …/files: a folder in the workspace (or the one entry, for a file). */
+  public List<Results.FileEntry> listFiles(String sandbox, String path) {
+    Map<String, Object> m = obj(t.json(new Request("GET", sb(sandbox, "files")).query("path", path)));
+    List<Results.FileEntry> out = new ArrayList<>();
+    for (Map<String, Object> f : objs(m.get("files"))) out.add(entry(f));
+    return out;
+  }
+
+  /** The workspace, /workspace. */
+  public List<Results.FileEntry> listFiles(String sandbox) { return listFiles(sandbox, "/workspace"); }
+
+  /** GET …/files/stat: one entry, not following a symlink. */
+  public Results.FileEntry statFile(String sandbox, String path) {
+    return entry(obj(t.json(new Request("GET", sb(sandbox, "files", "stat")).query("path", path))));
+  }
+
+  /** GET …/files/content: a file's bytes. A body cut short throws StreamException. */
+  public byte[] readFile(String sandbox, String path) {
+    Request r = new Request("GET", sb(sandbox, "files", "content")).query("path", path);
+    try (Transport.Response resp = t.open(r)) {
+      byte[] b;
+      try {
+        b = resp.readAll();
+      } catch (java.io.IOException e) {
+        if (resp.timedOut.get()) throw t.timeout(r);
+        throw new Kosa8Exception.StreamException("read " + path + ": " + e.getMessage(), "", "", null);
+      }
+      if (resp.status >= 400) throw Kosa8Exception.fromResponse(resp.status, Transport.decode(b), r.method, r.path);
+      String want = resp.headers.get("content-length");
+      if (want != null && Long.parseLong(want) != b.length)
+        throw new Kosa8Exception.StreamException(path + ": got " + b.length + " of " + want + " bytes", "", "", null);
+      return b;
+    }
+  }
+
+  /** A file as UTF-8 text. */
+  public String readText(String sandbox, String path) {
+    return new String(readFile(sandbox, path), java.nio.charset.StandardCharsets.UTF_8);
+  }
+
+  private Request writeReq(String sandbox, String path, Object body, Options.WriteFile o) {
+    if (o == null) o = new Options.WriteFile();
+    return new Request("PUT", sb(sandbox, "files", "content")).query("path", path).query("mode", o.mode).body(body).approval(o.approval);
+  }
+
+  /** PUT …/files/content: replace a file, making its folders. */
+  public Map<String, Object> writeFile(String sandbox, String path, byte[] data, Options.WriteFile o) {
+    return obj(t.json(writeReq(sandbox, path, data, o)));
+  }
+
+  public Map<String, Object> writeFile(String sandbox, String path, byte[] data) { return writeFile(sandbox, path, data, null); }
+
+  /** Text, as UTF-8. */
+  public Map<String, Object> writeFile(String sandbox, String path, String text, Options.WriteFile o) {
+    return writeFile(sandbox, path, text.getBytes(java.nio.charset.StandardCharsets.UTF_8), o);
+  }
+
+  public Map<String, Object> writeFile(String sandbox, String path, String text) { return writeFile(sandbox, path, text, null); }
+
+  /** A stream, sent chunked: for files too large to hold in memory. */
+  public Map<String, Object> writeFile(String sandbox, String path, InputStream data, Options.WriteFile o) {
+    return obj(t.json(writeReq(sandbox, path, data, o)));
+  }
+
+  /** DELETE …/files: a file, or with recursive a folder. */
+  public Map<String, Object> deleteFile(String sandbox, String path, Options.DeleteFile o) {
+    if (o == null) o = new Options.DeleteFile();
+    return obj(t.json(new Request("DELETE", sb(sandbox, "files")).query("path", path).query("recursive", o.recursive).approval(o.approval)));
+  }
+
+  public Map<String, Object> deleteFile(String sandbox, String path) { return deleteFile(sandbox, path, null); }
+
+  /** POST …/files/mkdir: a folder and its parents. */
+  public Map<String, Object> makeDir(String sandbox, String path, Options.Approval o) {
+    return obj(t.json(new Request("POST", sb(sandbox, "files", "mkdir")).body(Map.of("path", path)).approval(appr(o))));
+  }
+
+  public Map<String, Object> makeDir(String sandbox, String path) { return makeDir(sandbox, path, null); }
+
+  /** POST …/files/move: rename or move a file or folder. */
+  public Map<String, Object> moveFile(String sandbox, String from, String to, Options.Approval o) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("from", from);
+    body.put("to", to);
+    return obj(t.json(new Request("POST", sb(sandbox, "files", "move")).body(body).approval(appr(o))));
+  }
+
+  public Map<String, Object> moveFile(String sandbox, String from, String to) { return moveFile(sandbox, from, to, null); }
+
+  /**
+   * POST …/git: op is clone, status, add, commit, push, pull, checkout, branches, log or
+   * diff; the options carry that op's fields. A git failure returns ok() == false.
+   */
+  public Results.GitResult git(String sandbox, String op, Options.Git o) {
+    if (o == null) o = new Options.Git();
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("op", op);
+    body.putAll(o.fields);
+    Map<String, Object> m = obj(t.json(new Request("POST", sb(sandbox, "git")).body(body).approval(o.approval)));
+    return new Results.GitResult(m.get("op") instanceof String s ? s : op, bool(m.get("ok")), (int) num(m.get("exit")),
+        str(m.get("stdout")), str(m.get("stderr")), str(m.get("path")),
+        m.get("status") instanceof Map<?, ?> ? obj(m.get("status")) : null,
+        m.get("log") instanceof List<?> ? objs(m.get("log")) : null,
+        m.get("branches") instanceof List<?> ? objs(m.get("branches")) : null);
+  }
+
+  /** Clone url into path (null: the daemon picks a folder in /workspace). */
+  public Results.GitResult gitClone(String sandbox, String url, String path, Options.Git o) {
+    return git(sandbox, "clone", (o == null ? new Options.Git() : o.copy()).url(url).path(path));
+  }
+
+  public Results.GitResult gitClone(String sandbox, String url, String path) { return gitClone(sandbox, url, path, null); }
+
+  /** The repository's branch, upstream and changed files, in status(). */
+  public Results.GitResult gitStatus(String sandbox, String path) { return git(sandbox, "status", new Options.Git().path(path)); }
+
+  /** Stage everything (unless addAll(false)) and commit. A failed add is returned without committing. */
+  public Results.GitResult gitCommit(String sandbox, String path, String message, Options.Git o) {
+    if (o == null) o = new Options.Git();
+    if (o.addAll) {
+      Options.Git add = new Options.Git().path(path).approval(o.approval);
+      if (o.fields.get("image") instanceof String img) add.image(img);
+      Results.GitResult r = git(sandbox, "add", add);
+      if (!r.ok()) return r;
+    }
+    return git(sandbox, "commit", o.copy().path(path).message(message));
+  }
+
+  public Results.GitResult gitCommit(String sandbox, String path, String message) { return gitCommit(sandbox, path, message, null); }
+
+  private static Results.Session session(Map<String, Object> m) {
+    return new Results.Session(str(m.get("name")), str(m.get("id")), str(m.get("image")), str(m.get("status")));
+  }
+
+  /** POST …/sessions: a shell that keeps cd and export between commands. name null: the daemon picks one. */
+  public Results.Session createSession(String sandbox, String name, Options.Session o) {
+    if (o == null) o = new Options.Session();
+    Map<String, Object> body = new LinkedHashMap<>();
+    if (name != null && !name.isEmpty()) body.put("name", name);
+    if (o.image != null && !o.image.isEmpty()) body.put("image", o.image);
+    if (o.env != null && !o.env.isEmpty()) body.put("env", o.env);
+    return session(obj(t.json(new Request("POST", sb(sandbox, "sessions")).body(body).approval(o.approval))));
+  }
+
+  public Results.Session createSession(String sandbox, String name) { return createSession(sandbox, name, null); }
+
+  /** GET …/sessions */
+  public List<Results.Session> listSessions(String sandbox) {
+    List<Results.Session> out = new ArrayList<>();
+    for (Map<String, Object> m : objs(t.json(new Request("GET", sb(sandbox, "sessions"))))) out.add(session(m));
+    return out;
+  }
+
+  /** POST …/sessions/{name}/exec: run one command line in the session. */
+  public Results.ShellResult sessionExec(String sandbox, String session, String command, Options.Shell o) {
+    if (o == null) o = new Options.Shell();
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("command", command);
+    if (o.timeout != null && !o.timeout.isZero()) body.put("timeout_s", seconds(o.timeout));
+    Map<String, Object> m = obj(t.json(new Request("POST", sb(sandbox, "sessions", Transport.enc(session), "exec"))
+        .body(body).approval(o.approval).timeout(slack(o.timeout))));
+    return new Results.ShellResult((int) num(m.get("exit")), str(m.get("stdout")), str(m.get("stderr")), str(m.get("cwd")),
+        num(m.get("duration_ms")), bool(m.get("timed_out")), bool(m.get("truncated")));
+  }
+
+  public Results.ShellResult sessionExec(String sandbox, String session, String command) {
+    return sessionExec(sandbox, session, command, null);
+  }
+
+  /** Run a command in a session (default "main"), making the session on first use. */
+  public Results.ShellResult shell(String sandbox, String command, Options.Shell o) {
+    if (o == null) o = new Options.Shell();
+    try {
+      return sessionExec(sandbox, o.session, command, o);
+    } catch (Kosa8Exception.NotFoundException e) {
+      if (!String.valueOf(e.getMessage()).contains("no such session")) throw e;
+    }
+    createSession(sandbox, o.session, new Options.Session().approval(o.approval));
+    return sessionExec(sandbox, o.session, command, o);
+  }
+
+  public Results.ShellResult shell(String sandbox, String command) { return shell(sandbox, command, null); }
+
+  /** DELETE …/sessions/{name} */
+  public Map<String, Object> deleteSession(String sandbox, String session, Options.Approval o) {
+    return obj(t.json(new Request("DELETE", sb(sandbox, "sessions", Transport.enc(session))).approval(appr(o))));
+  }
+
+  public Map<String, Object> deleteSession(String sandbox, String session) { return deleteSession(sandbox, session, null); }
+
+  /**
+   * POST …/pty: a container with a terminal; returns its id. Connect to
+   * {@code /kosa8/v1/sandboxes/{id}/containers/{cid}/tty} with any WebSocket client: binary
+   * messages are the terminal, text messages JSON control.
+   */
+  public String startPty(String sandbox, Options.Pty o) {
+    if (o == null) o = new Options.Pty();
+    Map<String, Object> body = new LinkedHashMap<>();
+    if (o.image != null && !o.image.isEmpty()) body.put("image", o.image);
+    if (o.command != null && !o.command.isEmpty()) body.put("command", o.command);
+    if (o.cols > 0 && o.rows > 0) {
+      body.put("cols", o.cols);
+      body.put("rows", o.rows);
+    }
+    if (o.env != null && !o.env.isEmpty()) body.put("env", o.env);
+    return str(obj(t.json(new Request("POST", sb(sandbox, "pty")).body(body).approval(o.approval))).get("id"));
+  }
+
+  public String startPty(String sandbox) { return startPty(sandbox, null); }
+
+  /** POST …/containers/{cid}/resize: a terminal's new size. */
+  public Map<String, Object> resizePty(String sandbox, String container, int cols, int rows) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("cols", cols);
+    body.put("rows", rows);
+    return obj(t.json(new Request("POST", sb(sandbox, "containers", Transport.enc(container), "resize")).body(body)));
+  }
+
+  /** POST …/previews: a signed link to a web server in the sandbox that expires. */
+  public Results.Preview createPreview(String sandbox, int port, Options.Preview o) {
+    if (o == null) o = new Options.Preview();
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("port", port);
+    if (o.session != null && !o.session.isEmpty()) body.put("session", o.session);
+    if (o.container != null && !o.container.isEmpty()) body.put("container", o.container);
+    if (o.expiresIn != null && !o.expiresIn.isZero()) body.put("expires_in_s", seconds(o.expiresIn));
+    Map<String, Object> m = obj(t.json(new Request("POST", sb(sandbox, "previews")).body(body).approval(o.approval)));
+    return new Results.Preview(str(m.get("url")), str(m.get("token")), str(m.get("expires_at")), str(m.get("container")),
+        (int) num(m.get("port")), str(m.get("listen")));
+  }
+
+  public Results.Preview createPreview(String sandbox, int port) { return createPreview(sandbox, port, null); }
+
+  /** POST /kosa8/v1/previews/rotate: end every preview link at once. */
+  public Map<String, Object> revokePreviews(Options.Approval o) {
+    return obj(t.json(new Request("POST", "/kosa8/v1/previews/rotate").approval(appr(o))));
+  }
+
+  public Map<String, Object> revokePreviews() { return revokePreviews(null); }
+
+  /** POST …/lifecycle: change auto-stop, auto-delete, TTL or ephemeral; returns the sandbox. */
+  public Map<String, Object> setLifecycle(String sandbox, Options.Lifecycle o) {
+    if (o == null) o = new Options.Lifecycle();
+    return obj(t.json(new Request("POST", sb(sandbox, "lifecycle")).body(o.body()).approval(o.approval)));
+  }
+
+  /** GET /kosa8/v1/templates */
+  public List<Results.Template> listTemplates() {
+    List<Results.Template> out = new ArrayList<>();
+    for (Map<String, Object> m : objs(t.json(new Request("GET", "/kosa8/v1/templates"))))
+      out.add(new Results.Template(str(m.get("name")), str(m.get("image")), num(m.get("size_bytes")), str(m.get("created")),
+          str(m.get("dockerfile"))));
+    return out;
+  }
+
+  /** DELETE /kosa8/v1/templates/{name} */
+  public Map<String, Object> deleteTemplate(String name, Options.Approval o) {
+    return obj(t.json(new Request("DELETE", "/kosa8/v1/templates/" + Transport.enc(name)).approval(appr(o))));
+  }
+
+  public Map<String, Object> deleteTemplate(String name) { return deleteTemplate(name, null); }
+
+  /**
+   * POST /kosa8/v1/templates: build contextDir's Dockerfile in a throwaway sandbox and keep the
+   * image as a template. The folder is sent as a tar, leaving out what .dockerignore lists.
+   * Returns the final frame (its "image" is the template's image); a failed build throws
+   * StreamException. The client's default timeout does not apply.
+   */
+  public Map<String, Object> buildTemplate(String name, java.nio.file.Path contextDir, Options.Build o) {
+    if (o == null) o = new Options.Build();
+    StringBuilder path = new StringBuilder("/kosa8/v1/templates?name=").append(Transport.enc(name))
+        .append("&dockerfile=").append(Transport.enc(o.dockerfile));
+    if (o.buildArgs != null)
+      for (Map.Entry<String, String> e : o.buildArgs.entrySet())
+        path.append("&buildarg=").append(Transport.enc(e.getKey() + "=" + e.getValue()));
+    if (o.egress != null && !o.egress.isEmpty()) path.append("&egress=").append(Transport.enc(o.egress));
+    if (o.replace) path.append("&replace=1");
+    java.nio.file.Path tar = null;
+    try {
+      tar = java.nio.file.Files.createTempFile("kosa8-template-ctx-", ".tar");
+      try (java.io.OutputStream out = new java.io.BufferedOutputStream(java.nio.file.Files.newOutputStream(tar))) {
+        Tar.context(contextDir, o.dockerfile, out);
+      }
+      final Consumer<byte[]> onOutput = o.onOutput;
+      java.util.concurrent.atomic.AtomicReference<Map<String, Object>> done = new java.util.concurrent.atomic.AtomicReference<>();
+      try (InputStream body = java.nio.file.Files.newInputStream(tar)) {
+        // A build takes minutes: no timeout, whatever the client's default.
+        t.framesRaw(new Request("POST", path.toString()).body(body).approval(o.approval).timeout(Duration.ZERO), f -> {
+          if (done.get() != null) return;
+          Map<String, Object> m = obj(f);
+          if (bool(m.get("done"))) {
+            String err = str(m.get("error"));
+            if (!err.isEmpty()) throw new Kosa8Exception.StreamException(err, "", "", err);
+            done.set(m);
+            return;
+          }
+          if (onOutput != null && m.get("data") instanceof String d && !d.isEmpty()) onOutput.accept(java.util.Base64.getDecoder().decode(d));
+        });
+      }
+      Map<String, Object> last = done.get();
+      if (last == null) throw new Kosa8Exception.StreamException("template build stream ended unexpectedly (no final frame)", "", "", null);
+      return last;
+    } catch (java.io.IOException e) {
+      throw new Kosa8Exception("pack the build context " + contextDir + ": " + e.getMessage(), e);
+    } finally {
+      if (tar != null) {
+        try {
+          java.nio.file.Files.deleteIfExists(tar);
+        } catch (java.io.IOException ignored) {
+          // a temp file
+        }
+      }
+    }
+  }
+
+  public Map<String, Object> buildTemplate(String name, java.nio.file.Path contextDir) { return buildTemplate(name, contextDir, null); }
 
   /** A handle bound to one sandbox. */
   public Sandbox sandbox(String id) { return new Sandbox(this, id); }

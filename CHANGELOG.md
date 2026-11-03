@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0 — 2026-11-03
+
+The sandbox toolbox of daemon 0.13, matching the Python SDK's.
+
+- **Code**: `runCode` (Python, JavaScript, TypeScript) returns `Results.CodeResult`; artifacts
+  (matplotlib charts) come back decoded to `byte[]`.
+- **Files**: `listFiles`, `statFile` (`Results.FileEntry`), `readFile`, `readText`, `writeFile`
+  (text, bytes or a chunked stream, with `mode`), `deleteFile` (`recursive`), `makeDir`, `moveFile`.
+  A file body cut short throws `StreamException`.
+- **Git**: `git(op, Options.Git)` and `gitClone`, `gitStatus`, `gitCommit` (stages everything first
+  unless `addAll(false)`) returning `Results.GitResult`; a git failure is `ok() == false`.
+- **Sessions**: `createSession`, `listSessions`, `sessionExec`, `deleteSession`, and `shell`, which
+  makes the session (default `main`) the first time the daemon says there is no such session.
+- **Terminals and previews**: `startPty`, `resizePty`, `createPreview` (`Results.Preview`), `revokePreviews`.
+- **Lifecycle**: `setLifecycle(Options.Lifecycle)` sends only the fields set (0 turns one off);
+  `Options.Create` gains `autoStopMin`, `ttlMin`, `autoDeleteMin`, `ephemeral` and `template`.
+- **Templates**: `listTemplates`, `deleteTemplate`, `buildTemplate`. The build context is packed by a
+  built-in ustar writer (PAX headers for long names and link targets; symlinks kept as links)
+  honouring `.dockerignore` prefixes, spooled to a temp file and streamed; output frames go to
+  `onOutput`; a build error throws `StreamException`. No timeout applies to a build.
+- Every toolbox method is also on the `Sandbox` handle.
+
+Not changed (daemon behaviour): a 0.13.0 daemon built before the session fix answers
+`deleteSession` with `500 cannot delete running task` (the SIGKILL has not landed yet); the
+session is gone a moment later. The SDK does not retry.
+
 ## 0.1.2 — 2026-11-03
 
 - **`capture(String hostFile)` is documented as the host file the capture is written to**

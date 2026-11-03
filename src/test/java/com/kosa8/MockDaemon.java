@@ -30,13 +30,16 @@ final class MockDaemon implements AutoCloseable {
     Map<String, Object> json() { return (Map<String, Object>) Json.parse(bodyText()); }
   }
 
-  /** A handler's answer: JSON with a status, or NDJSON frames. */
-  record Reply(int status, Object json, List<Map<String, Object>> frames) {}
+  /** A handler's answer: JSON with a status, NDJSON frames, or raw bytes under a declared length. */
+  record Reply(int status, Object json, List<Map<String, Object>> frames, byte[] raw, long length) {}
 
-  static Reply json(int status, Object body) { return new Reply(status, body, null); }
+  static Reply json(int status, Object body) { return new Reply(status, body, null, null, 0); }
 
   @SafeVarargs
-  static Reply frames(Map<String, Object>... fs) { return new Reply(200, null, List.of(fs)); }
+  static Reply frames(Map<String, Object>... fs) { return new Reply(200, null, List.of(fs), null, 0); }
+
+  /** Bytes with a Content-Length of length (more than raw.length makes a short body). */
+  static Reply bytes(byte[] raw, long length) { return new Reply(200, null, null, raw, length); }
 
   static Map<String, Object> frame(String stream, String data) {
     Map<String, Object> m = new LinkedHashMap<>();
@@ -133,7 +136,11 @@ final class MockDaemon implements AutoCloseable {
         }
       }
       Reply reply = handler != null ? handler.apply(req) : json(404, Map.of("error", "no route " + req.method + " " + path));
-      if (reply.frames == null) {
+      if (reply.raw != null) {
+        out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + reply.length
+            + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(reply.raw);
+      } else if (reply.frames == null) {
         byte[] b = Json.write(reply.json).getBytes(StandardCharsets.UTF_8);
         out.write(("HTTP/1.1 " + reply.status + " X\r\nContent-Type: application/json\r\nContent-Length: " + b.length
             + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
