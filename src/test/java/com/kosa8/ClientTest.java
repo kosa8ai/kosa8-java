@@ -219,7 +219,7 @@ public class ClientTest {
     Checkpoint cli = book.list("sb").get(0);
     eq("cli", cli.label(), "label");
     eq(123456789, cli.created().getNano(), "nanoseconds");
-    eq("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(path)), "mode");
+    if (!Transport.WINDOWS) eq("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(path)), "mode");
     check(Files.exists(dir.resolve("checkpoints.json.lock")), "lock file");
     check(!Files.readString(path).contains("\"auto\""), "auto omitted when false");
   }
