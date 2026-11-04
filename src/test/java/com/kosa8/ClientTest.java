@@ -127,11 +127,26 @@ public class ClientTest {
         List.of(Map.of("id", "e-1"), Map.of("id", "e-2"), Map.of("id", "e-3")), "fork_ms", 412, "count", 3)));
     var slow = new java.util.LinkedHashMap<>(MockDaemon.frame("stdout", "slow"));
     slow.put("_sleep", 1500);
-    d.on("POST", "/kosa8/v1/sandboxes/e-1/run", r -> MockDaemon.frames(slow, MockDaemon.done("exit", 0)));
+    // e-1 must finish after e-2. A fixed delay alone raced e-2's retry
+    // backoff on a slow CI runner, so e-1 also waits until e-2's successful
+    // retry has been answered, then lingers.
+    java.util.concurrent.CountDownLatch e2Done = new java.util.concurrent.CountDownLatch(1);
+    d.on("POST", "/kosa8/v1/sandboxes/e-1/run", r -> {
+      try {
+        e2Done.await(10, java.util.concurrent.TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      return MockDaemon.frames(slow, MockDaemon.done("exit", 0));
+    });
     AtomicInteger tries = new AtomicInteger();
-    d.on("POST", "/kosa8/v1/sandboxes/e-2/run", r -> tries.incrementAndGet() == 1
-        ? MockDaemon.frames(MockDaemon.done("error", "connection refused")) // engine still settling
-        : MockDaemon.frames(MockDaemon.frame("stdout", "fast"), MockDaemon.done("exit", 0)));
+    d.on("POST", "/kosa8/v1/sandboxes/e-2/run", r -> {
+      if (tries.incrementAndGet() == 1) {
+        return MockDaemon.frames(MockDaemon.done("error", "connection refused")); // engine still settling
+      }
+      e2Done.countDown();
+      return MockDaemon.frames(MockDaemon.frame("stdout", "fast"), MockDaemon.done("exit", 0));
+    });
     d.on("POST", "/kosa8/v1/sandboxes/e-3/run", r -> MockDaemon.frames(MockDaemon.frame("stdout", "fail"), MockDaemon.done("exit", 1)));
     List<String> deleted = Collections.synchronizedList(new ArrayList<>());
     d.on("DELETE", "/kosa8/v1/sandboxes/e-\\d", r -> {

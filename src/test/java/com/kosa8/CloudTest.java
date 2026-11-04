@@ -64,7 +64,7 @@ public final class CloudTest extends ClientTest {
 
   public void testCloudKeyAndAddress() {
     Kosa8Cloud c = Kosa8Cloud.builder().getenv(Map.of("KOSA8_API_KEY", KEY)::get).build();
-    eq("https://api.kosa8.cloud", c.baseUrl(), "default address");
+    eq("https://api.kosa8.com", c.baseUrl(), "default address");
     check(!c.toString().contains(KEY), "toString hides the key: " + c);
     eq("https://cp.example.com", Kosa8Cloud.builder().getenv(Map.of("KOSA8_API_KEY", KEY, "KOSA8_CLOUD_URL", "https://cp.example.com/")::get)
         .build().baseUrl(), "KOSA8_CLOUD_URL");

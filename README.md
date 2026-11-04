@@ -63,7 +63,7 @@ System.out.println(out.get("ok") + " " + out.get("result")); // true {hello=kosa
 | Builder method | Default |
 |---|---|
 | `apiKey` / `KOSA8_API_KEY` | required; starts with `k8c_live_` |
-| `baseUrl` / `KOSA8_CLOUD_URL` | `https://api.kosa8.cloud`; `https` only, except `localhost`, `127.0.0.1` and `::1` |
+| `baseUrl` / `KOSA8_CLOUD_URL` | `https://api.kosa8.com`; `https` only, except `localhost`, `127.0.0.1` and `::1` |
 | `timeout` | 120 s per request |
 
 Also: `cloud.me()`, `cloud.usage()`, `sandboxes().list(all)` / `get(id)`, `box.wake()` / `refresh()`,
