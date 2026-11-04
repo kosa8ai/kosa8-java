@@ -41,6 +41,8 @@ final class Transport {
     return t;
   });
 
+  static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase().startsWith("windows");
+
   final Endpoint endpoint;
   private final String actor;
   private final String agentToken;
@@ -180,6 +182,9 @@ final class Transport {
       String hint = msg.contains("No such file") || msg.contains("Connection refused") || msg.contains("does not exist")
           || e instanceof java.net.ConnectException || e instanceof java.nio.file.NoSuchFileException
           ? " (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)" : "";
+      if (endpoint.isUnix() && WINDOWS && endpoint.socketPath().equals(Endpoint.defaultSocketPath()))
+        hint = (hint.isEmpty() ? " (" : hint.substring(0, hint.length() - 1) + "; ")
+            + "on Windows the engine runs in WSL2: run `kosa8 wsl setup`, or set KOSA8_HOST)";
       throw new Kosa8Exception.ConnectionException("kosa8 daemon unreachable at " + endpoint.target() + ": "
           + e.getClass().getSimpleName() + ": " + msg + hint, r.method, r.path, e);
     }

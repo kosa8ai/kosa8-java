@@ -79,7 +79,7 @@ public class ClientTest {
   }
 
   public void testConnectionError() {
-    Kosa8Client c = Kosa8Client.builder().socketPath("/tmp/k8j-nope.sock").checkpoints(new MemoryCheckpointStore()).getenv(x -> null).build();
+    Kosa8Client c = Kosa8Client.builder().socketPath(d.dir.resolve("nope.sock").toString()).checkpoints(new MemoryCheckpointStore()).getenv(x -> null).build();
     var e = raises(Kosa8Exception.ConnectionException.class, c::health);
     check(e.getMessage().contains("kosa8 daemon start"), "hint: " + e.getMessage());
   }
@@ -219,7 +219,7 @@ public class ClientTest {
     Checkpoint cli = book.list("sb").get(0);
     eq("cli", cli.label(), "label");
     eq(123456789, cli.created().getNano(), "nanoseconds");
-    eq("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(path)), "mode");
+    if (!Transport.WINDOWS) eq("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(path)), "mode");
     check(Files.exists(dir.resolve("checkpoints.json.lock")), "lock file");
     check(!Files.readString(path).contains("\"auto\""), "auto omitted when false");
   }
@@ -238,6 +238,59 @@ public class ClientTest {
     raises(Kosa8Exception.class, () -> Endpoint.resolve("ftp://x", null, null, false, Endpoint.env(Map.of())));
     eq(null, Endpoint.resolve("https://w.example.com", null, null, false, Endpoint.env(Map.of("KOSA8_TOKEN", "t"))).token(),
         "env token only for an env host");
+  }
+
+  static Path savedWorker(String json) throws Exception {
+    Path f = Files.createTempDirectory("k8jw").resolve("worker.json");
+    Files.writeString(f, json);
+    return f;
+  }
+
+  public void testSavedWorker() throws Exception {
+    var none = Endpoint.env(Map.of());
+    Path w = savedWorker("{\"host\": \"http://127.0.0.1:7428\", \"token\": \"saved-tok\", \"via\": \"wsl\","
+        + " \"distro\": \"Ubuntu\", \"insecure\": false, \"saved\": \"2026-11-03T00:00:00Z\"}");
+    Endpoint e = Endpoint.resolve(null, null, null, false, none, w);
+    eq("http://127.0.0.1:7428", e.target(), "saved host used when KOSA8_HOST unset");
+    eq("saved-tok", e.token(), "saved token");
+    eq("tok2", Endpoint.resolve(null, null, "tok2", false, none, w).token(), "explicit token beats the saved one");
+
+    e = Endpoint.resolve(null, null, null, false, Endpoint.env(Map.of("KOSA8_HOST", "https://w.example.com")), w);
+    eq("https://w.example.com:443", e.target(), "KOSA8_HOST wins");
+    eq(null, e.token(), "saved token never goes to an env host");
+    e = Endpoint.resolve("https://o.example.com", null, null, false, none, w);
+    eq("https://o.example.com:443", e.target(), "explicit host wins");
+    eq(null, e.token(), "saved token never goes to an explicit host");
+    eq("unix:///s.sock", Endpoint.resolve(null, "/s.sock", null, false, none, w).target(), "socket path skips the file");
+    eq("unix://" + Endpoint.defaultSocketPath(), Endpoint.resolve(null, null, null, false, none, null).target(), "no file");
+
+    for (String bad : List.of("{not json", "{\"host\": \"  \", \"token\": \"t\"}", "[]", "{\"host\": 7}", ""))
+      eq("unix://" + Endpoint.defaultSocketPath(), Endpoint.resolve(null, null, null, false, none, savedWorker(bad)).target(),
+          "malformed/blank → socket: " + bad);
+    eq("unix://" + Endpoint.defaultSocketPath(),
+        Endpoint.resolve(null, null, null, false, none, w.resolveSibling("missing.json")).target(), "missing file");
+
+    Path lan = savedWorker("{\"host\": \"http://192.168.1.20:7428\", \"token\": \"t\"}");
+    raises(Kosa8Exception.class, () -> Endpoint.resolve(null, null, null, false, none, lan));
+    eq("http://192.168.1.20:7428", Endpoint.resolve(null, null, null, true, none, lan).target(), "insecure option");
+    eq("http://192.168.1.20:7428",
+        Endpoint.resolve(null, null, null, false, Endpoint.env(Map.of("KOSA8_INSECURE", "1")), lan).target(), "KOSA8_INSECURE");
+    Path lanOk = savedWorker("{\"host\": \"http://192.168.1.20:7428\", \"insecure\": true}");
+    eq("http://192.168.1.20:7428", Endpoint.resolve(null, null, null, false, none, lanOk).target(), "saved insecure: true");
+    eq("http://192.168.1.20:7428", Endpoint.resolve(null, null, null, false, none, savedWorker("{\"host\": \"192.168.1.20:7428\", \"insecure\": true}")).target(), "bare host:port");
+    eq("unix:///w.sock", Endpoint.resolve(null, null, null, false, none, savedWorker("{\"host\": \"unix:///w.sock\"}")).target(), "unix:// host");
+
+    Kosa8Client c = Kosa8Client.builder().workerFile(w).checkpoints(new MemoryCheckpointStore()).getenv(x -> null).build();
+    eq("http://127.0.0.1:7428", c.endpoint().target(), "builder reads the file");
+    c = Kosa8Client.builder().workerFile(null).checkpoints(new MemoryCheckpointStore()).getenv(x -> null).build();
+    check(c.endpoint().isUnix(), "workerFile(null) reads none");
+  }
+
+  public void testWindowsHint() {
+    if (!Transport.WINDOWS) return;
+    Kosa8Client c = Kosa8Client.builder().workerFile(null).checkpoints(new MemoryCheckpointStore()).getenv(x -> null).build();
+    var e = raises(Kosa8Exception.ConnectionException.class, c::health);
+    check(e.getMessage().contains("kosa8 wsl setup"), "windows hint: " + e.getMessage());
   }
 
   public void testRemoteBearerAndTimeout() throws Exception {
@@ -321,27 +374,45 @@ public class ClientTest {
     check(!e.toString().contains("sekret"), "token redacted: " + e);
   }
 
+  /** A mock daemon, or null where the platform has no unix-domain sockets. */
+  static MockDaemon mock() throws Exception {
+    try {
+      return new MockDaemon();
+    } catch (UnsupportedOperationException | java.net.SocketException e) {
+      return null;
+    }
+  }
+
   public static void main(String[] args) throws Exception {
-    int pass = 0;
+    int pass = 0, skipped = 0;
     List<String> failed = new ArrayList<>();
     List<Method> tests = new ArrayList<>();
-    for (Class<?> c : List.of(ClientTest.class, ToolboxTest.class)) tests.addAll(List.of(c.getDeclaredMethods()));
+    for (Class<?> c : List.of(ClientTest.class, ToolboxTest.class, CloudTest.class)) tests.addAll(List.of(c.getDeclaredMethods()));
     for (Method m : tests) {
       if (!m.getName().startsWith("test")) continue;
       ClientTest t = (ClientTest) m.getDeclaringClass().getDeclaredConstructor().newInstance();
-      try (MockDaemon d = new MockDaemon()) {
+      MockDaemon d = mock();
+      try {
         t.d = d;
-        t.k = d.client();
+        t.k = d == null ? null : d.client();
         m.invoke(t);
         pass++;
         System.out.println("ok   " + m.getName());
       } catch (java.lang.reflect.InvocationTargetException e) {
+        if (d == null && e.getCause() instanceof NullPointerException) {
+          // The test needs the mock daemon, which needs AF_UNIX.
+          skipped++;
+          System.out.println("skip " + m.getName() + ": no unix-domain sockets on this platform");
+          continue;
+        }
         failed.add(m.getName());
         System.out.println("FAIL " + m.getName() + ": " + e.getCause());
         e.getCause().printStackTrace(System.out);
+      } finally {
+        if (d != null) d.close();
       }
     }
-    System.out.println(pass + " passed, " + failed.size() + " failed");
+    System.out.println(pass + " passed, " + failed.size() + " failed" + (skipped > 0 ? ", " + skipped + " skipped" : ""));
     if (!failed.isEmpty()) System.exit(1);
   }
 }
