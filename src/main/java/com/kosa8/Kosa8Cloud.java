@@ -31,7 +31,7 @@ import java.util.function.Function;
  * (for example {@code payment_required}, {@code quota_exceeded}).
  */
 public final class Kosa8Cloud {
-  public static final String DEFAULT_CLOUD_URL = "https://api.kosa8.cloud";
+  public static final String DEFAULT_CLOUD_URL = "https://api.kosa8.com";
   public static final String KEY_PREFIX = "k8c_live_";
 
   private final String key;
@@ -62,7 +62,7 @@ public final class Kosa8Cloud {
 
     /** Default $KOSA8_API_KEY. */
     public Builder apiKey(String v) { apiKey = v; return this; }
-    /** Default $KOSA8_CLOUD_URL, then https://api.kosa8.cloud. */
+    /** Default $KOSA8_CLOUD_URL, then https://api.kosa8.com. */
     public Builder baseUrl(String v) { baseUrl = v; return this; }
     /** Per request; default 120 s. */
     public Builder timeout(Duration v) { timeout = v; return this; }
