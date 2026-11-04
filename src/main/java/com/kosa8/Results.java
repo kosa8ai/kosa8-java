@@ -29,4 +29,42 @@ public final class Results {
 
   /** What rewind restored. */
   public record Rewind(Object sandbox, Checkpoint checkpoint, List<String> dropped, Object restoreMs) {}
+
+  // --- toolbox ------------------------------------------------------------------
+
+  /** A file a code run produced: today, a chart as a PNG. */
+  public record Artifact(String type, String name, byte[] data) {}
+
+  /** The outcome of runCode. A non-zero exit code is not an error. */
+  public record CodeResult(int exitCode, String stdout, String stderr, String language, String image,
+      List<Artifact> artifacts, long durationMs, boolean timedOut, boolean truncated) {
+    public boolean ok() { return exitCode == 0 && !timedOut; }
+  }
+
+  /** The outcome of one command in a session. {@code cwd} is where the shell is now. */
+  public record ShellResult(int exitCode, String stdout, String stderr, String cwd, long durationMs, boolean timedOut,
+      boolean truncated) {
+    public boolean ok() { return exitCode == 0 && !timedOut; }
+  }
+
+  /**
+   * The outcome of a git operation. A git failure is {@code ok() == false}, not an exception.
+   * {@code status}, {@code log} and {@code branches} are filled for those ops, otherwise null.
+   */
+  public record GitResult(String op, boolean ok, int exitCode, String stdout, String stderr, String path,
+      Map<String, Object> status, List<Map<String, Object>> log, List<Map<String, Object>> branches) {}
+
+  /** A file or folder in the sandbox. {@code type} is file, dir, symlink or other; {@code link} a symlink's target. */
+  public record FileEntry(String name, String path, String type, long size, int mode, String modTime, String link) {
+    public boolean isDir() { return "dir".equals(type); }
+  }
+
+  /** A shell session. */
+  public record Session(String name, String id, String image, String status) {}
+
+  /** A signed preview link to a port in the sandbox. {@code expiresAt} is RFC 3339. */
+  public record Preview(String url, String token, String expiresAt, String container, int port, String listen) {}
+
+  /** A template: an image built from a Dockerfile that new sandboxes can start from. */
+  public record Template(String name, String image, long sizeBytes, String created, String dockerfile) {}
 }

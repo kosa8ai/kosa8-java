@@ -88,9 +88,13 @@ final class Transport {
     private final Closeable conn;
     private final ScheduledFuture<?> watchdog;
     final AtomicBoolean timedOut;
+    /** Response headers, lower-cased names. */
+    final Map<String, String> headers;
 
-    Response(int status, InputStream body, Closeable conn, ScheduledFuture<?> watchdog, AtomicBoolean timedOut) {
+    Response(int status, Map<String, String> headers, InputStream body, Closeable conn, ScheduledFuture<?> watchdog,
+        AtomicBoolean timedOut) {
       this.status = status;
+      this.headers = headers;
       this.body = body;
       this.conn = conn;
       this.watchdog = watchdog;
@@ -166,7 +170,7 @@ final class Transport {
       if (h.getOrDefault("transfer-encoding", "").toLowerCase(Locale.ROOT).contains("chunked")) body = new ChunkedIn(bin);
       else if (h.containsKey("content-length")) body = new LimitedIn(bin, Long.parseLong(h.get("content-length")));
       else body = bin;
-      return new Response(status, body, conn, dog, timedOut);
+      return new Response(status, h, body, conn, dog, timedOut);
     } catch (IOException | RuntimeException e) {
       if (dog != null) dog.cancel(false);
       closeQuietly(conn);
@@ -266,6 +270,11 @@ final class Transport {
 
   /** A request whose answer is NDJSON frames; each is passed to fn with data decoded from base64. */
   void frames(Request r, Consumer<Frame> fn) {
+    framesRaw(r, m -> fn.accept(Frame.of(m)));
+  }
+
+  /** A request whose answer is NDJSON frames; each is passed to fn as the decoded JSON object. */
+  void framesRaw(Request r, Consumer<Object> fn) {
     try (Response resp = open(r)) {
       if (resp.status >= 400) {
         byte[] b;
@@ -280,7 +289,7 @@ final class Transport {
         String line;
         while ((line = readLine(resp.body)) != null) {
           if (line.isBlank()) continue;
-          fn.accept(Frame.of(Json.parse(line)));
+          fn.accept(Json.parse(line));
         }
       } catch (IOException e) {
         if (resp.timedOut.get()) throw timeout(r);

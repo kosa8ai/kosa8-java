@@ -19,7 +19,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Dependency-free tests: run with {@code ./test.sh}. Each public void test* method is one test. */
-public final class ClientTest {
+public class ClientTest {
   static void check(boolean ok, String what) {
     if (!ok) throw new AssertionError(what);
   }
@@ -324,9 +324,11 @@ public final class ClientTest {
   public static void main(String[] args) throws Exception {
     int pass = 0;
     List<String> failed = new ArrayList<>();
-    for (Method m : ClientTest.class.getDeclaredMethods()) {
+    List<Method> tests = new ArrayList<>();
+    for (Class<?> c : List.of(ClientTest.class, ToolboxTest.class)) tests.addAll(List.of(c.getDeclaredMethods()));
+    for (Method m : tests) {
       if (!m.getName().startsWith("test")) continue;
-      ClientTest t = new ClientTest();
+      ClientTest t = (ClientTest) m.getDeclaringClass().getDeclaredConstructor().newInstance();
       try (MockDaemon d = new MockDaemon()) {
         t.d = d;
         t.k = d.client();

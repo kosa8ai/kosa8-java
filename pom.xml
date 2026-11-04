@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.kosa8</groupId>
   <artifactId>kosa8</artifactId>
-  <version>0.1.2</version>
+  <version>0.2.0</version>
   <packaging>jar</packaging>
   <name>kosa8</name>
   <description>Java SDK for kosa8: microVM sandboxes for AI agents. No dependencies.</description>
