@@ -30,7 +30,7 @@ import java.util.regex.Pattern;
  * }</pre>
  */
 public final class Kosa8Client {
-  public static final String VERSION = "0.3.1";
+  public static final String VERSION = "0.4.0";
   private static final Pattern TRANSIENT = Pattern.compile(
       "connection refused|EOF|connection reset|broken pipe|no such file or directory|stream ended|ECONNREFUSED|ECONNRESET|unreachable",
       Pattern.CASE_INSENSITIVE);
