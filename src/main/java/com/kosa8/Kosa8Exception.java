@@ -1,6 +1,8 @@
 package com.kosa8;
 
+import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Every error this SDK throws. The daemon's own words are kept in
@@ -99,9 +101,39 @@ public class Kosa8Exception extends RuntimeException {
     public NotFoundException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
-  /** 402: kosa8 Cloud refused new work until a payment method is on file. */
+  /**
+   * 402: kosa8 Cloud refused new work: no payment method on file ({@code payment_required}), the
+   * spending cap is reached ({@code spending_cap_reached}), or a paid Store item's price was not
+   * accepted ({@code price_not_accepted}); {@link #code()} says which.
+   */
   public static class PaymentRequiredException extends ApiException {
     public PaymentRequiredException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+
+    /** Where the person adds a payment method or credit; null when the cloud sent none. */
+    public String upgradeUrl() { return bodyString(body(), "upgrade_url"); }
+
+    /**
+     * A sentence an AI agent should relay to its person word for word (and then stop, not retry);
+     * null when the cloud sent none.
+     */
+    public String agentMessage() { return bodyString(body(), "agent_message"); }
+  }
+
+  /**
+   * 423 {@code org_frozen}: the organization is frozen in the Security Center. Nothing runs until an
+   * owner or admin unfreezes it there.
+   */
+  public static class OrgFrozenException extends ApiException {
+    public OrgFrozenException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /**
+   * A buffered kosa8 Cloud exec ran too long: HTTP 504 or code {@code exec_timeout}, or today's 502
+   * {@code host_failed} "timed out" after about 30 s. Run long work in the background, writing to
+   * /workspace, and poll it: {@code box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1' &")}.
+   */
+  public static class ExecTimeoutException extends ApiException {
+    public ExecTimeoutException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
   /** 409 */
@@ -109,12 +141,22 @@ public class Kosa8Exception extends RuntimeException {
     public ConflictException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
-  /** 429: too many requests, or a quota reached. */
+  /** 429: too many requests, or a quota reached ({@code quota_exceeded}). */
   public static class RateLimitException extends ApiException {
+    private Duration retryAfter;
+
     public RateLimitException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+
+    /** How long the server asked to wait (its Retry-After header), when it sent one. */
+    public Optional<Duration> retryAfter() { return Optional.ofNullable(retryAfter); }
+
+    RateLimitException withRetryAfter(Duration d) {
+      retryAfter = d;
+      return this;
+    }
   }
 
-  /** 501 */
+  /** 501: not available here (from kosa8 Cloud: {@code not_available} / {@code not_supported}, a host without the data plane). */
   public static class UnsupportedException extends ApiException {
     public UnsupportedException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
@@ -179,9 +221,14 @@ public class Kosa8Exception extends RuntimeException {
       case 402 -> new PaymentRequiredException(text, status, msg, rem, method, path, body);
       case 404 -> new NotFoundException(text, status, msg, rem, method, path, body);
       case 409 -> new ConflictException(text, status, msg, rem, method, path, body);
+      case 423 -> new OrgFrozenException(text, status, msg, rem, method, path, body);
       case 429 -> new RateLimitException(text, status, msg, rem, method, path, body);
       case 501 -> new UnsupportedException(text, status, msg, rem, method, path, body);
       default -> new ApiException(text, status, msg, rem, method, path, body);
     };
+  }
+
+  static String bodyString(Object body, String key) {
+    return body instanceof Map<?, ?> m && m.get(key) instanceof String s && !s.isEmpty() ? s : null;
   }
 }

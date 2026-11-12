@@ -21,14 +21,16 @@ import java.util.function.Function;
  *
  * <pre>{@code
  * Kosa8Cloud cloud = Kosa8Cloud.builder().build();   // KOSA8_API_KEY from the environment
- * CloudSandbox box = cloud.sandboxes().create("python");
- * System.out.print(box.exec(List.of("python3", "-c", "print(6 * 7)")).stdout()); // 42
+ * CloudSandbox box = cloud.sandboxes().create(new CloudOptions.Create().ttlSeconds(3600));
+ * System.out.print(box.exec("echo hi > /workspace/a.txt && cat /workspace/a.txt").stdout()); // hi
  * box.delete();
  * }</pre>
  *
  * <p>Authentication is an API key ({@code k8c_live_...}) made in the cloud dashboard. Errors are the
  * SDK's usual {@link Kosa8Exception}s; each carries the cloud's stable {@link Kosa8Exception#code()}
- * (for example {@code payment_required}, {@code quota_exceeded}).
+ * (for example {@code payment_required}, {@code quota_exceeded}); see
+ * {@link Kosa8Exception.PaymentRequiredException}, {@link Kosa8Exception.OrgFrozenException},
+ * {@link Kosa8Exception.RateLimitException} and {@link Kosa8Exception.ExecTimeoutException}.
  */
 public final class Kosa8Cloud {
   public static final String DEFAULT_CLOUD_URL = "https://api.kosa8.com";
@@ -117,21 +119,52 @@ public final class Kosa8Cloud {
   /** This month's usage, bill estimate and whether work is paused for payment. */
   public Map<String, Object> usage() { return obj(request("GET", "/v1/usage", null)); }
 
+  /** The cloud's templates the org can create from now: key, cpus, mem_mb, image, regions, warm, own_host. */
+  public List<Map<String, Object>> templates() { return objs(obj(request("GET", "/v1/templates", null)).get("templates")); }
+
+  /** About how long a buffered exec may run before kosa8 Cloud cuts it off, in seconds. */
+  public static final int EXEC_LIMIT_S = 30;
+
+  static final String EXEC_HINT = "a buffered exec is limited to about " + EXEC_LIMIT_S
+      + " s; run long work in the background, writing to /workspace, and poll it";
+
   Object request(String method, String path, Object body) {
+    return send(method, path, body, null, false);
+  }
+
+  /** The answer's raw bytes (a file download). */
+  byte[] requestBytes(String method, String path) {
+    return (byte[]) send(method, path, null, null, true);
+  }
+
+  /** Sends raw bytes as application/octet-stream (a file upload); the answer is JSON. */
+  Object requestUpload(String method, String path, byte[] data) {
+    return send(method, path, null, data, false);
+  }
+
+  private Object send(String method, String path, Object body, byte[] raw, boolean rawAnswer) {
     HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(timeout)
-        .header("Authorization", "Bearer " + key).header("Accept", "application/json");
-    if (body != null) {
+        .header("Authorization", "Bearer " + key).header("User-Agent", "kosa8-java/" + Kosa8Client.VERSION)
+        .header("Accept", rawAnswer ? "application/octet-stream" : "application/json");
+    if (raw != null) {
+      rb.header("Content-Type", "application/octet-stream");
+      rb.method(method, HttpRequest.BodyPublishers.ofByteArray(raw));
+    } else if (body != null) {
       rb.header("Content-Type", "application/json");
       rb.method(method, HttpRequest.BodyPublishers.ofString(Json.write(body), StandardCharsets.UTF_8));
     } else {
       rb.method(method, HttpRequest.BodyPublishers.noBody());
     }
-    HttpResponse<String> resp;
+    HttpResponse<byte[]> resp;
     try {
-      resp = http.send(rb.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      resp = http.send(rb.build(), HttpResponse.BodyHandlers.ofByteArray());
     } catch (HttpTimeoutException e) {
-      throw new Kosa8Exception.TimeoutException("kosa8 Cloud did not answer within " + timeout.toMillis() / 1000.0 + " s",
-          method, path);
+      String m = "kosa8 Cloud did not answer within " + timeout.toMillis() / 1000.0 + " s";
+      if (isExecPath(path)) {
+        throw new Kosa8Exception.ExecTimeoutException(m + " (" + EXEC_HINT + ")", 0, null, null, method, path, null)
+            .withCode("exec_timeout");
+      }
+      throw new Kosa8Exception.TimeoutException(m, method, path);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new Kosa8Exception.ConnectionException("interrupted talking to kosa8 Cloud", method, path, e);
@@ -139,19 +172,32 @@ public final class Kosa8Cloud {
       String why = e.getMessage() != null ? e.getMessage() : (e instanceof ConnectException ? "connection refused" : e.toString());
       throw new Kosa8Exception.ConnectionException("could not reach kosa8 Cloud at " + baseUrl + ": " + why, method, path, e);
     }
-    String text = resp.body() == null ? "" : resp.body();
+    byte[] bytes = resp.body() == null ? new byte[0] : resp.body();
+    if (rawAnswer && resp.statusCode() < 400) return bytes;
+    String text = new String(bytes, StandardCharsets.UTF_8);
     Object parsed;
     try {
       parsed = text.isEmpty() ? null : Json.parse(text);
     } catch (RuntimeException e) {
       parsed = text;
     }
-    if (resp.statusCode() >= 400) throw cloudError(resp.statusCode(), parsed, method, path);
+    if (resp.statusCode() >= 400) {
+      throw cloudError(resp.statusCode(), parsed, method, path, resp.headers().firstValue("Retry-After").orElse(null));
+    }
     return parsed;
   }
 
-  /** The cloud answers {error: code, message}: the sentence is the message, and the code is kept. */
+  static boolean isExecPath(String path) {
+    int q = path.indexOf('?');
+    return (q < 0 ? path : path.substring(0, q)).endsWith("/exec");
+  }
+
   static Kosa8Exception cloudError(int status, Object body, String method, String path) {
+    return cloudError(status, body, method, path, null);
+  }
+
+  /** The cloud answers {error: code, message}: the sentence is the message, and the code is kept. */
+  static Kosa8Exception cloudError(int status, Object body, String method, String path, String retryAfter) {
     String code = null;
     Object msgBody = body;
     if (body instanceof Map<?, ?> m) {
@@ -161,7 +207,39 @@ public final class Kosa8Cloud {
       mb.put("error", msg);
       msgBody = mb;
     }
-    return Kosa8Exception.fromResponse(status, msgBody, body, method, path).withCode(code);
+    String message = msgBody instanceof Map<?, ?> mm ? (mm.get("error") == null ? "" : String.valueOf(mm.get("error")))
+        : (msgBody instanceof String ms ? ms.strip() : "");
+    boolean execTimeout = status == 504 || "exec_timeout".equals(code)
+        // Today the Worker gives up on the host after about 30 s: 502 host_failed "... timed out".
+        || (status == 502 && isExecPath(path) && message.toLowerCase(java.util.Locale.ROOT).contains("timed out"));
+    if (execTimeout) {
+      String base = message.isEmpty() ? "request failed with HTTP " + status : message;
+      return new Kosa8Exception.ExecTimeoutException(base + " (" + EXEC_HINT + ")", status, message.isEmpty() ? null : message,
+          null, method, path, body).withCode(code != null ? code : "exec_timeout");
+    }
+    Kosa8Exception e = Kosa8Exception.fromResponse(status, msgBody, body, method, path).withCode(code);
+    if (e instanceof Kosa8Exception.RateLimitException rl) rl.withRetryAfter(parseRetryAfter(retryAfter));
+    return e;
+  }
+
+  /** Retry-After is seconds or an HTTP date; null when absent or unreadable. */
+  static Duration parseRetryAfter(String v) {
+    if (v == null || v.isBlank()) return null;
+    String t = v.strip();
+    try {
+      double secs = Double.parseDouble(t);
+      if (secs < 0 || Double.isNaN(secs) || Double.isInfinite(secs)) return null;
+      return Duration.ofMillis((long) (secs * 1000));
+    } catch (NumberFormatException ignored) {
+      // an HTTP date
+    }
+    try {
+      java.time.ZonedDateTime at = java.time.ZonedDateTime.parse(t, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME);
+      Duration d = Duration.between(java.time.Instant.now(), at.toInstant());
+      return d.isNegative() ? Duration.ZERO : d;
+    } catch (java.time.format.DateTimeParseException ignored) {
+      return null;
+    }
   }
 
   @SuppressWarnings("unchecked")
@@ -198,16 +276,60 @@ public final class Kosa8Cloud {
       return new CloudSandbox(Kosa8Cloud.this, obj(obj(request("POST", "/v1/sandboxes", b)).get("sandbox")));
     }
 
+    /**
+     * Start a sandbox with a lifetime, Store price and the rest:
+     * {@code create(new CloudOptions.Create().template("python").ttlSeconds(3600))}. Only the fields
+     * set are sent; a bad ttl (outside 60 s to 90 days), or both ttlSeconds and deleteAfter, throws
+     * IllegalArgumentException before any request.
+     */
+    public CloudSandbox create(CloudOptions.Create options) {
+      Map<String, Object> b = (options == null ? new CloudOptions.Create() : options).body();
+      return new CloudSandbox(Kosa8Cloud.this, obj(obj(request("POST", "/v1/sandboxes", b)).get("sandbox")));
+    }
+
     /** The org's live sandboxes. */
     public List<CloudSandbox> list() { return list(false); }
 
     /** The org's sandboxes; with all, deleted ones too. */
-    public List<CloudSandbox> list(boolean all) {
+    public List<CloudSandbox> list(boolean all) { return listPage(new CloudOptions.List().all(all)).sandboxes(); }
+
+    /** One page of sandboxes (with a limit or cursor), or every one from a server that does not page. */
+    public List<CloudSandbox> list(CloudOptions.List options) { return listPage(options).sandboxes(); }
+
+    /** The first page of live sandboxes. */
+    public CloudSandboxPage listPage() { return listPage(null); }
+
+    /**
+     * One page of sandboxes and the cursor of the next (null at the end). Today's server ignores
+     * limit and cursor and answers everything as one page.
+     */
+    public CloudSandboxPage listPage(CloudOptions.List options) {
+      CloudOptions.List o = options == null ? new CloudOptions.List() : options;
+      Map<String, Object> r = obj(request("GET", "/v1/sandboxes" + o.query(), null));
       List<CloudSandbox> out = new ArrayList<>();
-      for (Map<String, Object> s : objs(obj(request("GET", "/v1/sandboxes" + (all ? "?all=1" : ""), null)).get("sandboxes"))) {
-        out.add(new CloudSandbox(Kosa8Cloud.this, s));
+      for (Map<String, Object> s : objs(r.get("sandboxes"))) out.add(new CloudSandbox(Kosa8Cloud.this, s));
+      String next = r.get("next_cursor") instanceof String n && !n.isEmpty() ? n : null;
+      return new CloudSandboxPage(out, next);
+    }
+
+    /** Every live sandbox, following next_cursor page by page. */
+    public List<CloudSandbox> listAll() { return listAll(null); }
+
+    /**
+     * Every sandbox, following next_cursor page by page from options' cursor (limit is the page
+     * size). Stops when a cursor comes back a second time, so a looping server cannot hang it.
+     */
+    public List<CloudSandbox> listAll(CloudOptions.List options) {
+      CloudOptions.List o = options == null ? new CloudOptions.List() : options.copy();
+      List<CloudSandbox> out = new ArrayList<>();
+      java.util.Set<String> seen = new java.util.HashSet<>();
+      while (true) {
+        CloudSandboxPage page = listPage(o);
+        out.addAll(page.sandboxes());
+        String next = page.nextCursor();
+        if (next == null || !seen.add(next)) return out;
+        o.cursor(next);
       }
-      return out;
     }
 
     public CloudSandbox get(String id) {

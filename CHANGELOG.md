@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0 — 2026-11-12
+
+kosa8 Cloud parity with the Python, TypeScript and Go SDKs. The default Cloud address stays
+`https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).
+
+- **Lifetimes**: `sandboxes().create(CloudOptions.Create)` takes `template`, `region`, `sleepAfterS`,
+  `ttlSeconds` (60 s to 90 days), `deleteAfter` (Unix ms; not with `ttlSeconds`) and `acceptPrice`
+  (paid Store items), checked before any request. `box.update(CloudOptions.Update)` changes
+  `ttlSeconds`, `deleteAfter` or `sleepAfterS`; `clearLifetime()` removes the automatic delete.
+- **Listing**: `list(CloudOptions.List)` (`all`, `limit`, `cursor`), `listPage(...)` returning
+  `CloudSandboxPage` (`sandboxes()`, `nextCursor()`), and `listAll(...)`, which follows cursors and
+  stops if one repeats. `list()` and `list(all)` are unchanged.
+- **Files** (data plane): `box.files()` → `CloudSandboxFiles` with `read` (`byte[]`), `readText`,
+  `write` (`byte[]` or `String`, sent as raw bytes), `list` (default `/workspace`), `mkdir`,
+  `delete(path, recursive)`, returning `CloudFileInfo`.
+- **Checkpoints, rewind, fork, ports** (data plane): `box.checkpoint(label)` → `CloudCheckpoint`,
+  `box.checkpoints()`, `box.rewind(id)` → `CloudRewindResult` (`checkpoint`, `backup`, `ms`),
+  `box.fork(n)` (1 to 100) → new `CloudSandbox`es, `box.ports()` → `CloudPort`. On hosts without
+  the data plane these throw `UnsupportedException` (501); not every host has it yet.
+- `cloud.templates()`. Typed getters on `CloudSandbox`: `template`, `region`, `parentId`, `source`,
+  `originItemVersion`, `deleteAfter`, `sleepAfterS`, `createdAt`, `ownHost`, `hostUnreachable`,
+  `costUsd`, `lastError` (`info()` still has the raw map).
+- **Errors**: `PaymentRequiredException.upgradeUrl()` / `agentMessage()`; new `OrgFrozenException`
+  (423 `org_frozen`) and `ExecTimeoutException` (504, code `exec_timeout`, or today's 502 "timed out"
+  on `/exec` after about 30 s; also a client timeout on `/exec`); `RateLimitException.retryAfter()`
+  from the Retry-After header.
+- Requests send `User-Agent: kosa8-java/0.4.0`.
+- README: Maven and Gradle coordinates, Cloud quickstart first, the base template (Alpine, fresh
+  container per exec, only `/workspace` persists, 30 s exec limit, 64 KiB bodies, 8 MiB files),
+  Cloud errors.
+
 ## 0.3.1 — 2026-11-03
 
 - The default kosa8 Cloud address is now `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`, which kosa8 Cloud does not use). `KOSA8_CLOUD_URL` still overrides it.
