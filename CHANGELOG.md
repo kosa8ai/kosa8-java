@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased (on top of 0.4.0)
-
 The rest of the kosa8 Cloud API:
 
 - **Sized and Docker creates**: `CloudOptions.Create` `size`, `cpus(cpus, memMb)`, `image`,
@@ -19,7 +17,7 @@ The rest of the kosa8 Cloud API:
 - Fix: `CloudFileInfo.mode` is an `Integer` (permission bits); the API sends a number, so it was
   always null.
 
-## 0.4.0 — 2026-11-12
+## 0.4.0 — 2026-11-15
 
 kosa8 Cloud parity with the Python, TypeScript and Go SDKs. The default Cloud address stays
 `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).
