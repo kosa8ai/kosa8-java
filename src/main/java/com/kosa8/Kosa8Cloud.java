@@ -42,6 +42,9 @@ public final class Kosa8Cloud {
   private final HttpClient http;
   private final Sandboxes sandboxes = new Sandboxes();
   private final Functions functions = new Functions();
+  private final Snapshots snapshots = new Snapshots();
+  private final Secrets secrets = new Secrets();
+  private final Pipelines pipelines = new Pipelines();
 
   private Kosa8Cloud(String key, String baseUrl, Duration timeout) {
     this.key = key;
@@ -108,6 +111,21 @@ public final class Kosa8Cloud {
   public Sandboxes sandboxes() { return sandboxes; }
 
   public Functions functions() { return functions; }
+
+  /** The org's durable snapshots. */
+  public Snapshots snapshots() { return snapshots; }
+
+  /** The org's secrets. */
+  public Secrets secrets() { return secrets; }
+
+  /** kosa8 Pipelines: CI runs and hooks. */
+  public Pipelines pipelines() { return pipelines; }
+
+  /** What the org and its hosts can do, for feature detection. */
+  public Map<String, Object> capabilities() { return obj(request("GET", "/v1/capabilities", null)); }
+
+  /** The named host lists an egress policy's presets can use. */
+  public Map<String, Object> egressPresets() { return obj(obj(request("GET", "/v1/egress/presets", null)).get("presets")); }
 
   /** Never the key. */
   @Override
@@ -283,8 +301,10 @@ public final class Kosa8Cloud {
      * IllegalArgumentException before any request.
      */
     public CloudSandbox create(CloudOptions.Create options) {
-      Map<String, Object> b = (options == null ? new CloudOptions.Create() : options).body();
-      return new CloudSandbox(Kosa8Cloud.this, obj(obj(request("POST", "/v1/sandboxes", b)).get("sandbox")));
+      CloudOptions.Create o = options == null ? new CloudOptions.Create() : options;
+      CloudSandbox box = new CloudSandbox(Kosa8Cloud.this, obj(obj(request("POST", "/v1/sandboxes", o.body())).get("sandbox")));
+      if (!o.noWait && "creating".equals(box.state())) box.waitRunning();
+      return box;
     }
 
     /** The org's live sandboxes. */
@@ -335,6 +355,155 @@ public final class Kosa8Cloud {
     public CloudSandbox get(String id) {
       return new CloudSandbox(Kosa8Cloud.this, obj(obj(request("GET", "/v1/sandboxes/" + Transport.enc(id), null)).get("sandbox")));
     }
+  }
+
+  /** {@code cloud.snapshots()}: the org's durable snapshots. */
+  public final class Snapshots {
+    private Snapshots() {}
+
+    /** The org's snapshots, newest first. */
+    public List<CloudSnapshot> list() { return list(null); }
+
+    /** One sandbox's snapshots (sandboxId null: all), newest first. */
+    public List<CloudSnapshot> list(String sandboxId) {
+      List<CloudSnapshot> out = new ArrayList<>();
+      String q = sandboxId == null ? "" : "?sandbox_id=" + Transport.enc(sandboxId);
+      for (Map<String, Object> m : objs(obj(request("GET", "/v1/snapshots" + q, null)).get("snapshots"))) out.add(CloudSnapshot.of(m));
+      return out;
+    }
+
+    public CloudSnapshot get(String id) { return CloudSnapshot.of(obj(obj(request("GET", "/v1/snapshots/" + Transport.enc(id), null)).get("snapshot"))); }
+
+    public void delete(String id) { request("DELETE", "/v1/snapshots/" + Transport.enc(id), null); }
+  }
+
+  /**
+   * {@code cloud.secrets()}: the org's secrets. A sandbox created with them holds only placeholders; its egress
+   * broker adds the values on the way out.
+   */
+  public final class Secrets {
+    private Secrets() {}
+
+    /** Store (or replace) a secret for upstream (an https origin). See {@link #set(String, Map)}. */
+    public Map<String, Object> set(String name, String value, String upstream, boolean pipelines) {
+      Map<String, Object> spec = new LinkedHashMap<>();
+      spec.put("value", value);
+      if (upstream != null) spec.put("upstream", upstream);
+      if (pipelines) spec.put("pipelines", true);
+      return set(name, spec);
+    }
+
+    /**
+     * Store (or replace) a secret: value (required; never logged or returned), and optionally upstream, header,
+     * scheme, methods, paths, env, pipelines (Pipelines runs may use it). Returns it without its value.
+     */
+    public Map<String, Object> set(String name, Map<String, ?> spec) {
+      CloudOptions.checkSecretName(name);
+      if (spec == null || !(spec.get("value") instanceof String v) || v.isEmpty()) throw new IllegalArgumentException("a secret needs a value");
+      return obj(obj(request("PUT", "/v1/secrets/" + Transport.enc(name), spec)).get("secret"));
+    }
+
+    /** The org's secrets, without values. */
+    public List<Map<String, Object>> list() { return objs(obj(request("GET", "/v1/secrets", null)).get("secrets")); }
+
+    /** Delete it; returns the sandboxes still holding it (they keep it until deleted). */
+    public List<String> delete(String name) {
+      List<String> out = new ArrayList<>();
+      Object held = obj(request("DELETE", "/v1/secrets/" + Transport.enc(CloudOptions.checkSecretName(name)), null)).get("still_held_by");
+      if (held instanceof List<?> l) for (Object o : l) out.add(String.valueOf(o));
+      return out;
+    }
+  }
+
+  /**
+   * {@code cloud.pipelines()}: kosa8 Pipelines, CI on kosa8 Cloud. A run reads the repository's
+   * .kosa8/pipeline.yml (or runs its .github/workflows through act), each job in a sandbox of its own.
+   */
+  public final class Pipelines {
+    private Pipelines() {}
+
+    /** The states a finished run ends in. */
+    public static final java.util.Set<String> DONE = java.util.Set.of("success", "failure", "cancelled", "skipped", "error");
+
+    private String p(String id, String suffix) { return "/v1/pipelines/runs/" + Transport.enc(id) + suffix; }
+
+    /** Run a repository at ref (null: its default branch). */
+    public Map<String, Object> run(String repoUrl, String ref) {
+      Map<String, Object> o = new LinkedHashMap<>();
+      if (ref != null) o.put("ref", ref);
+      return run(repoUrl, o);
+    }
+
+    /**
+     * Run a repository; options are the API's: ref, event, workflow, job, inputs, size, secrets (names marked
+     * pipelines), token_secret, status_secret, timeout_s. Returns the run.
+     */
+    public Map<String, Object> run(String repoUrl, Map<String, ?> options) {
+      if (repoUrl == null || repoUrl.isEmpty()) throw new IllegalArgumentException("a run needs a repo URL");
+      Map<String, Object> b = new LinkedHashMap<>();
+      b.put("repo_url", repoUrl);
+      if (options != null) b.putAll(options);
+      return obj(obj(request("POST", "/v1/pipelines/runs", b)).get("run"));
+    }
+
+    /** Runs, newest first; state and limit may be null. */
+    public List<Map<String, Object>> runs(String state, Integer limit) {
+      StringBuilder q = new StringBuilder();
+      if (state != null) q.append("&state=").append(Transport.enc(state));
+      if (limit != null) q.append("&limit=").append(limit);
+      return objs(obj(request("GET", "/v1/pipelines/runs" + (q.length() == 0 ? "" : "?" + q.substring(1)), null)).get("runs"));
+    }
+
+    public Map<String, Object> get(String id) { return obj(obj(request("GET", p(id, ""), null)).get("run")); }
+
+    /** Poll a run every interval until it finishes; TimeoutException after timeout. */
+    public Map<String, Object> waitFor(String id, Duration timeout, Duration interval) {
+      long deadline = System.nanoTime() + timeout.toNanos();
+      while (true) {
+        Map<String, Object> r = get(id);
+        if (DONE.contains(String.valueOf(r.get("state")))) return r;
+        if (System.nanoTime() > deadline) {
+          throw new Kosa8Exception.TimeoutException("pipeline run " + id + " was still " + r.get("state") + " after " + timeout.toSeconds() + " s", "GET", p(id, ""));
+        }
+        CloudSandbox.pause(interval);
+      }
+    }
+
+    /** Its logs by job (job null: every job; after: a previous answer's next), secrets replaced with ***. */
+    public Map<String, Object> logs(String id, String job, Integer after) {
+      StringBuilder q = new StringBuilder();
+      if (job != null) q.append("&job=").append(Transport.enc(job));
+      if (after != null) q.append("&after=").append(after);
+      return obj(request("GET", p(id, "/logs") + (q.length() == 0 ? "" : "?" + q.substring(1)), null));
+    }
+
+    public Map<String, Object> cancel(String id) { return obj(obj(request("POST", p(id, "/cancel"), new LinkedHashMap<>())).get("run")); }
+
+    /** The files its jobs saved: job, idx, path, bytes, url. */
+    public List<Map<String, Object>> artifacts(String id) { return objs(obj(request("GET", p(id, "/artifacts"), null)).get("artifacts")); }
+
+    /** One artifact's bytes (a .tar.gz). */
+    public byte[] downloadArtifact(String id, String job, int idx) {
+      return requestBytes("GET", p(id, "/artifacts/" + Transport.enc(job) + "/" + idx));
+    }
+
+    /**
+     * A webhook URL for a repository's pushes and pull requests; options are the API's: provider, name, secret,
+     * size, secrets, token_secret, status_secret, workflow, timeout_s, cron, cron_ref. The answer's secret is
+     * shown only now: give it and url to the git host.
+     */
+    public Map<String, Object> createHook(String repoUrl, Map<String, ?> options) {
+      if (repoUrl == null || repoUrl.isEmpty()) throw new IllegalArgumentException("a hook needs a repo URL");
+      Map<String, Object> b = new LinkedHashMap<>();
+      b.put("repo_url", repoUrl);
+      if (options != null) b.putAll(options);
+      return obj(obj(request("POST", "/v1/pipelines/hooks", b)).get("hook"));
+    }
+
+    /** The org's hooks, without secrets. */
+    public List<Map<String, Object>> hooks() { return objs(obj(request("GET", "/v1/pipelines/hooks", null)).get("hooks")); }
+
+    public void deleteHook(String id) { request("DELETE", "/v1/pipelines/hooks/" + Transport.enc(id), null); }
   }
 
   /** {@code cloud.functions()}: deploy and call functions. */

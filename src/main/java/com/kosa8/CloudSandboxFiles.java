@@ -62,6 +62,30 @@ public final class CloudSandboxFiles {
     return CloudFileInfo.of(Kosa8Cloud.obj(Kosa8Cloud.obj(sb.cloud().request("POST", sb.p("/files/mkdir"), b)).get("file")));
   }
 
+  /** A file of any size (no 8 MiB cap), streamed by the host. */
+  public byte[] download(String path) { return sb.cloud().requestBytes("GET", q("/files/raw", path, false)); }
+
+  /** Write a file of any size, streamed to the host; returns its info. */
+  public CloudFileInfo upload(String path, byte[] content) {
+    if (content == null) throw new IllegalArgumentException("content is required");
+    return CloudFileInfo.of(Kosa8Cloud.obj(Kosa8Cloud.obj(sb.cloud().requestUpload("PUT", q("/files/raw", path, false), content)).get("file")));
+  }
+
+  /**
+   * A presigned URL for one download (GET) or upload (PUT) of path, straight to the host: url, method, path,
+   * expires_at. ttlS null takes the default. Keep the URL secret.
+   */
+  public Map<String, Object> link(String path, String method, Integer ttlS) {
+    if (path == null || path.isEmpty()) throw new IllegalArgumentException("a path is required, e.g. /workspace/app.py");
+    String m = method == null ? "GET" : method.toUpperCase(java.util.Locale.ROOT);
+    if (!m.equals("GET") && !m.equals("PUT")) throw new IllegalArgumentException("method must be GET or PUT, not " + method);
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("path", path);
+    b.put("method", m);
+    if (ttlS != null) b.put("ttl_s", ttlS);
+    return Kosa8Cloud.obj(Kosa8Cloud.obj(sb.cloud().request("POST", sb.p("/files/link"), b)).get("link"));
+  }
+
   /** Remove a file (or an empty folder). */
   public void delete(String path) { delete(path, false); }
 
