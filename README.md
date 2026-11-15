@@ -109,6 +109,56 @@ These need the host's data plane. On hosts without it the API answers 501 (`not_
 `not_supported`), thrown as `Kosa8Exception.UnsupportedException`. Not every kosa8 Cloud host has it
 yet; `exec`, `sleep`, `wake`, `update` and `delete` work everywhere.
 
+### Sized and Docker sandboxes, env, snapshots
+
+```java
+CloudSandbox box = cloud.sandboxes().create(new CloudOptions.Create()
+    .size("4x8").image("kosa8-template/universal-24.04-20261115.2").docker(true)
+    .env(Map.of("NODE_ENV", "production")).name("web").labels(Map.of("team", "a")).ttlSeconds(3600));
+// a sized create boots cold; create waits until it runs (.noWait() to skip)
+
+CloudSnapshot snap = box.snapshot("warm");          // durable: kept until deleted
+CloudSandbox copy = cloud.sandboxes().create(new CloudOptions.Create().snapshot(snap.id()));
+cloud.snapshots().delete(snap.id());                // also list, get
+```
+
+Also `cpus(cpus, memMb)`, `diskGb`, `persistent`, `cpu("dedicated")`, `region` (`us`, `eu` or an
+id), `secrets` and `egress`. `CloudOptions.List` takes `name` and `labels`.
+
+### Background commands, previews, terminal and more
+
+```java
+CloudBackgroundExec job = box.execBackground("npm run build");   // no 30 s limit
+job = box.waitBackground(job.id(), Duration.ofMinutes(30), Duration.ofSeconds(2));
+System.out.println(job.exitCode() + " " + job.output());
+
+System.out.println(box.previews().create(3000).url());           // private signed URL
+box.terminal(120, 40, null).get("url");                          // a wss:// PTY URL
+```
+
+- Files: `files().download(path)` / `upload(path, bytes)` (no 8 MiB cap), `files().link(path,
+  "PUT", null)` (presigned URL).
+- `egress()`, `setEgress(false, allow, deny, presets)`, `resetEgress()`; `cloud.egressPresets()`.
+- `runCode("print(6*7)", "a", null)` (stateful Python; persistent sandbox with python3),
+  `codeContexts`, `createCodeContext`, `resetCodeContext`, `deleteCodeContext`.
+- `schedules().create("0 * * * *", List.of("date"))`, `list`, `run`, `delete`.
+- `metrics()`, `logs(limit)`, `setLabels`, `secrets()`; `cloud.capabilities()`.
+
+### Secrets and Pipelines
+
+```java
+// Read the value from a file or System.in, never from argv or code.
+cloud.secrets().set("npm-token", value, "https://registry.npmjs.org", true); // also list, delete
+
+Map<String, Object> run = cloud.pipelines().run("https://github.com/me/app",
+    Map.of("ref", "main", "secrets", List.of("npm-token")));
+run = cloud.pipelines().waitFor((String) run.get("id"), Duration.ofHours(1), Duration.ofSeconds(5));
+cloud.pipelines().logs((String) run.get("id"), null, null);
+```
+
+Also `runs`, `get`, `cancel`, `artifacts`, `downloadArtifact`, `createHook` (webhook URL and
+optional cron), `hooks`, `deleteHook`.
+
 ### Functions
 
 ```java

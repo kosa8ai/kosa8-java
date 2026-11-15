@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (on top of 0.4.0)
+
+The rest of the kosa8 Cloud API:
+
+- **Sized and Docker creates**: `CloudOptions.Create` `size`, `cpus(cpus, memMb)`, `image`,
+  `diskGb`, `persistent`, `docker`, `cpu`, `name`, `labels`, `env`, `secrets`, `egress`,
+  `snapshot`, `noWait`; a cold boot is waited for with the new `CloudSandbox.waitRunning`.
+  `CloudOptions.List` takes `name` and `labels`; `CloudSandbox` gains `persistent()`, `name()`,
+  `image()`, `snapshotId()`, `cpu()`, `labels()`.
+- **Background commands** (`execBackground` -> `CloudBackgroundExec`, `backgroundExec`,
+  `waitBackground`), **durable snapshots** (`snapshot()` -> `CloudSnapshot`,
+  `cloud.snapshots()`), **previews** (`previews()` -> `CloudPreview`), **terminal**, raw
+  `files().download` / `upload` and `files().link`, **egress**, **secrets** (`cloud.secrets()`),
+  **schedules**, **code interpreter**, `metrics`, `logs`, `setLabels`, `cloud.capabilities()`.
+- **Pipelines** (`cloud.pipelines()`): `run`, `runs`, `get`, `waitFor`, `logs`, `cancel`,
+  `artifacts`, `downloadArtifact`, `createHook`, `hooks`, `deleteHook`.
+- Fix: `CloudFileInfo.mode` is an `Integer` (permission bits); the API sends a number, so it was
+  always null.
+
 ## 0.4.0 — 2026-11-12
 
 kosa8 Cloud parity with the Python, TypeScript and Go SDKs. The default Cloud address stays

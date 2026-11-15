@@ -299,8 +299,8 @@ public final class CloudTest extends ClientTest {
     try (Stub stub = new Stub(s -> {
       String u = s.path(), m = s.method();
       if (m.equals("GET") && u.startsWith("/v1/sandboxes/sbx_1/files/list")) return new Answer(200, Map.of("path", "/workspace", "files",
-          List.of(Map.of("name", "a.txt", "path", "/workspace/a.txt", "type", "file", "size", 5, "mode", "-rw-r--r--", "mod_time", "2026-11-12T00:00:00Z"),
-              Map.of("name", "d", "path", "/workspace/d", "type", "dir", "size", 4096, "mode", "drwxr-xr-x", "mod_time", "x"))));
+          List.of(Map.of("name", "a.txt", "path", "/workspace/a.txt", "type", "file", "size", 5, "mode", 420, "mod_time", "2026-11-12T00:00:00Z"),
+              Map.of("name", "d", "path", "/workspace/d", "type", "dir", "size", 4096, "mode", 493, "mod_time", "x"))));
       if (m.equals("GET") && u.startsWith("/v1/sandboxes/sbx_1/files?")) return new Answer(200, bin);
       if (m.equals("PUT")) return new Answer(200, Map.of("file", Map.of("name", "a b.txt", "path", "/workspace/a b.txt", "type", "file",
           "size", s.raw().length)));
@@ -324,7 +324,7 @@ public final class CloudTest extends ClientTest {
       check(java.util.Arrays.equals(bin, stub.seen.get(3).raw()), "bytes upload body");
       List<CloudFileInfo> ls = box.files().list();
       eq("GET /v1/sandboxes/sbx_1/files/list?path=%2Fworkspace", calls(stub).get(4), "list default /workspace");
-      eq(new CloudFileInfo("a.txt", "/workspace/a.txt", "file", 5L, "-rw-r--r--", "2026-11-12T00:00:00Z"), ls.get(0), "entry");
+      eq(new CloudFileInfo("a.txt", "/workspace/a.txt", "file", 5L, 420, "2026-11-12T00:00:00Z"), ls.get(0), "entry");
       check(ls.get(1).isDir(), "dir");
       box.files().list("/tmp");
       eq("GET /v1/sandboxes/sbx_1/files/list?path=%2Ftmp", calls(stub).get(5), "list path");
