@@ -128,7 +128,7 @@ id), `secrets` and `egress`. `CloudOptions.List` takes `name` and `labels`.
 ### Background commands, previews, terminal and more
 
 ```java
-CloudBackgroundExec job = box.execBackground("npm run build");   // no 30 s limit
+CloudBackgroundExec job = box.execBackground("npm run build");   // no 90 s limit
 job = box.waitBackground(job.id(), Duration.ofMinutes(30), Duration.ofSeconds(2));
 System.out.println(job.exitCode() + " " + job.output());
 
@@ -180,7 +180,7 @@ git. Use `template("python")` (or another key from `cloud.templates()`) for Pyth
 - **Each exec runs in a fresh container.** Only `/workspace` persists, so `cd`, `export` and packages
   installed elsewhere are gone by the next exec. Install packages into `/workspace` (for example
   `pip install --target /workspace/lib ...`).
-- **A buffered exec is cut off after about 30 s** and throws `Kosa8Exception.ExecTimeoutException`.
+- **A buffered exec runs at most 90 s** and throws `Kosa8Exception.ExecTimeoutException`.
   Run long work in the background and poll it:
   `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' > /dev/null 2>&1 &")`,
   then read `/workspace/test.exit` later.
@@ -195,7 +195,7 @@ Every error from the cloud is a `Kosa8Exception` carrying its stable `code()`, `
 | `PaymentRequiredException` (402) | `payment_required` (no payment method), `spending_cap_reached`, `price_not_accepted` | show `upgradeUrl()` to the person; an agent relays `agentMessage()` word for word and stops |
 | `OrgFrozenException` (423 `org_frozen`) | the org is frozen in the Security Center | an owner or admin must unfreeze it |
 | `RateLimitException` (429) | too many requests, or `quota_exceeded` (active sandbox limit) | wait `retryAfter()` (an `Optional<Duration>`) when set, or delete sandboxes |
-| `ExecTimeoutException` (504 `exec_timeout`, or today's 502 "timed out") | a buffered exec ran past about 30 s | run it in the background and poll |
+| `ExecTimeoutException` (504 `exec_timeout`, or today's 502 "timed out") | a buffered exec ran past its 90 s limit | run it in the background and poll |
 | `UnsupportedException` (501 `not_available` / `not_supported`) | the host has no data plane | use exec, or try later |
 
 A new organization runs nothing until a payment method is on file; until then creating a sandbox

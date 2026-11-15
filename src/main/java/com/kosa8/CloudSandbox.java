@@ -126,7 +126,7 @@ public final class CloudSandbox {
   public CloudBackgroundExec execBackground(String cmd) { return execBackground(List.of("sh", "-c", cmd), null, null); }
 
   /**
-   * Start a command that keeps running after this returns (no 30 s limit); poll it with
+   * Start a command that keeps running after this returns (no 90 s limit); poll it with
    * {@link #backgroundExec(String)} or {@link #waitBackground(String, java.time.Duration, java.time.Duration)}.
    */
   public CloudBackgroundExec execBackground(List<String> cmd, String image, Map<String, String> env) {
@@ -281,8 +281,8 @@ public final class CloudSandbox {
    * sandbox wakes for it.
    *
    * <p>Each exec runs in a fresh container: only {@code /workspace} persists, so {@code cd},
-   * {@code export} and packages installed elsewhere are gone by the next one. kosa8 Cloud cuts a
-   * buffered exec off after about 30 s, thrown as {@link Kosa8Exception.ExecTimeoutException}; run
+   * {@code export} and packages installed elsewhere are gone by the next one. kosa8 Cloud stops a
+   * buffered exec after 90 s, thrown as {@link Kosa8Exception.ExecTimeoutException}; run
    * long work in the background ({@code nohup sh -c '...' > /workspace/job.log 2>&1 &}) and poll it.
    * The request (command and env) is at most 64 KiB (413 {@code too_large}).
    */

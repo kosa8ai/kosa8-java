@@ -128,8 +128,8 @@ public class Kosa8Exception extends RuntimeException {
   }
 
   /**
-   * A buffered kosa8 Cloud exec ran too long: HTTP 504 or code {@code exec_timeout}, or today's 502
-   * {@code host_failed} "timed out" after about 30 s. Run long work in the background, writing to
+   * A buffered kosa8 Cloud exec ran too long: HTTP 504 or code {@code exec_timeout} past the 90 s limit,
+   * or an older server's 502 {@code host_failed} "timed out". Run long work in the background, writing to
    * /workspace, and poll it: {@code box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1' &")}.
    */
   public static class ExecTimeoutException extends ApiException {

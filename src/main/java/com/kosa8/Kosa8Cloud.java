@@ -140,10 +140,10 @@ public final class Kosa8Cloud {
   /** The cloud's templates the org can create from now: key, cpus, mem_mb, image, regions, warm, own_host. */
   public List<Map<String, Object>> templates() { return objs(obj(request("GET", "/v1/templates", null)).get("templates")); }
 
-  /** About how long a buffered exec may run before kosa8 Cloud cuts it off, in seconds. */
-  public static final int EXEC_LIMIT_S = 30;
+  /** How long a buffered exec may run before kosa8 Cloud stops it (504 exec_timeout), in seconds. */
+  public static final int EXEC_LIMIT_S = 90;
 
-  static final String EXEC_HINT = "a buffered exec is limited to about " + EXEC_LIMIT_S
+  static final String EXEC_HINT = "a buffered exec is stopped after " + EXEC_LIMIT_S
       + " s; run long work in the background, writing to /workspace, and poll it";
 
   Object request(String method, String path, Object body) {
@@ -228,7 +228,7 @@ public final class Kosa8Cloud {
     String message = msgBody instanceof Map<?, ?> mm ? (mm.get("error") == null ? "" : String.valueOf(mm.get("error")))
         : (msgBody instanceof String ms ? ms.strip() : "");
     boolean execTimeout = status == 504 || "exec_timeout".equals(code)
-        // Today the Worker gives up on the host after about 30 s: 502 host_failed "... timed out".
+        // Older Workers gave up on the host before the 90 s limit: 502 host_failed "... timed out".
         || (status == 502 && isExecPath(path) && message.toLowerCase(java.util.Locale.ROOT).contains("timed out"));
     if (execTimeout) {
       String base = message.isEmpty() ? "request failed with HTTP " + status : message;
