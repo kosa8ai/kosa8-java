@@ -461,7 +461,7 @@ public final class CloudTest extends ClientTest {
       var t = raises(Kosa8Exception.ExecTimeoutException.class, () -> box.exec("sleep 60"));
       check(t instanceof Kosa8Exception.ApiException, "ExecTimeout is an ApiException");
       eq("host_failed", t.code(), "502 keeps its code");
-      check(t.getMessage().contains("timed out") && t.getMessage().contains("30 s") && t.getMessage().contains("background"), t.getMessage());
+      check(t.getMessage().contains("timed out") && t.getMessage().contains("stopped after 90 s") && t.getMessage().contains("background"), t.getMessage());
       var t2 = raises(Kosa8Exception.ExecTimeoutException.class, () -> box.exec("sleep 60"));
       eq(504, t2.status(), "504");
       eq("exec_timeout", t2.code(), "504 code");
