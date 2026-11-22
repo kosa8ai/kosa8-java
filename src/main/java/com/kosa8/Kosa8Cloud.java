@@ -35,6 +35,8 @@ import java.util.function.Function;
 public final class Kosa8Cloud {
   public static final String DEFAULT_CLOUD_URL = "https://api.kosa8.com";
   public static final String KEY_PREFIX = "k8c_live_";
+  /** Where a person makes or replaces an API key. */
+  public static final String KEYS_URL = "https://app.kosa8.com/app#keys";
   /** A capability token from {@code cloud.tokens().create(...)} also works as the key. */
   public static final String TOKEN_PREFIX = "k8c_tok_";
 
@@ -96,9 +98,13 @@ public final class Kosa8Cloud {
     public Kosa8Cloud build() {
       String k = apiKey != null ? apiKey : getenv.apply("KOSA8_API_KEY");
       k = k == null ? "" : k.strip();
-      if (k.isEmpty()) throw new Kosa8Exception("no kosa8 Cloud API key: pass apiKey or set KOSA8_API_KEY");
+      if (k.isEmpty()) {
+        throw new Kosa8Exception("no kosa8 Cloud API key: set KOSA8_API_KEY or pass Kosa8Cloud.builder().apiKey(...); "
+            + "make one at " + KEYS_URL + " (API keys)");
+      }
       if (!k.startsWith(KEY_PREFIX) && !k.startsWith(TOKEN_PREFIX)) {
-        throw new Kosa8Exception("a kosa8 Cloud API key starts with " + KEY_PREFIX + " (or a capability token with " + TOKEN_PREFIX + ")");
+        throw new Kosa8Exception("a kosa8 Cloud API key starts with " + KEY_PREFIX + " (or a capability token with " + TOKEN_PREFIX
+            + "); check KOSA8_API_KEY, or copy a whole key from " + KEYS_URL);
       }
       String u = baseUrl;
       if (u == null || u.isEmpty()) u = getenv.apply("KOSA8_CLOUD_URL");
@@ -269,13 +275,15 @@ public final class Kosa8Cloud {
         throw new Kosa8Exception.ExecTimeoutException(m + " (" + EXEC_HINT + ")", 0, null, null, method, path, null)
             .withCode("exec_timeout");
       }
-      throw new Kosa8Exception.TimeoutException(m, method, path);
+      throw new Kosa8Exception.TimeoutException(m + "; retry, or allow more time with Kosa8Cloud.builder().timeout(Duration)",
+          method, path);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new Kosa8Exception.ConnectionException("interrupted talking to kosa8 Cloud", method, path, e);
     } catch (IOException e) {
       String why = e.getMessage() != null ? e.getMessage() : (e instanceof ConnectException ? "connection refused" : e.toString());
-      throw new Kosa8Exception.ConnectionException("could not reach kosa8 Cloud at " + baseUrl + ": " + why, method, path, e);
+      throw new Kosa8Exception.ConnectionException("could not reach kosa8 Cloud at " + baseUrl + ": " + why
+          + "; check the network connection and KOSA8_CLOUD_URL (unset it for " + DEFAULT_CLOUD_URL + "), then retry", method, path, e);
     }
     byte[] bytes = resp.body() == null ? new byte[0] : resp.body();
     if (rawAnswer && resp.statusCode() < 400) return bytes;
@@ -287,7 +295,9 @@ public final class Kosa8Cloud {
       parsed = text;
     }
     if (resp.statusCode() >= 400) {
-      throw cloudError(resp.statusCode(), parsed, method, path, resp.headers().firstValue("Retry-After").orElse(null));
+      var h = resp.headers();
+      throw cloudError(resp.statusCode(), parsed, method, path, h.firstValue("Retry-After").orElse(null),
+          h.firstValue("X-Request-Id").or(() -> h.firstValue("cf-ray")).orElse(null));
     }
     return parsed;
   }
@@ -303,6 +313,42 @@ public final class Kosa8Cloud {
 
   /** The cloud answers {error: code, message}: the sentence is the message, and the code is kept. */
   static Kosa8Exception cloudError(int status, Object body, String method, String path, String retryAfter) {
+    return cloudError(status, body, method, path, retryAfter, null);
+  }
+
+  /**
+   * As above, with the answer's request id. The exception's message is the server's sentence followed by
+   * what to act on ({@link #detail}); the bare sentence stays in daemonMessage().
+   */
+  static Kosa8Exception cloudError(int status, Object body, String method, String path, String retryAfter, String requestId) {
+    Kosa8Exception e = cloudError0(status, body, method, path, retryAfter).withRequestId(requestId);
+    return e.withDetail(detail(e, body));
+  }
+
+  /** The 401 hint, then {@code " [HTTP <status> <code>; retry in <n> s; request <id>; upgrade: <url>]"}. */
+  static String detail(Kosa8Exception e, Object body) {
+    StringBuilder b = new StringBuilder();
+    String sentence = e.daemonMessage() == null ? "" : e.daemonMessage();
+    if (e.status() == 401 && !"invalid_token".equals(e.code()) && !"key_suspended".equals(e.code())) {
+      b.append(" (check KOSA8_API_KEY; make a new key at ").append(KEYS_URL).append(")");
+    }
+    b.append(" [HTTP ").append(e.status());
+    if (e.code() != null && !e.code().isEmpty()) b.append(' ').append(e.code());
+    Double ra = e.retryAfterSeconds();
+    if (ra != null && ra > 0) {
+      b.append("; retry in ").append(ra == Math.rint(ra) ? String.valueOf(ra.longValue()) : String.valueOf(ra)).append(" s");
+    } else if (e.retryable()) {
+      b.append("; retryable");
+    }
+    if (e.requestId() != null) b.append("; request ").append(e.requestId());
+    if (e.status() == 402 && body instanceof Map<?, ?> m && m.get("upgrade_url") instanceof String u && !u.isEmpty()
+        && !sentence.contains(u)) {
+      b.append("; upgrade: ").append(u);
+    }
+    return b.append(']').toString();
+  }
+
+  private static Kosa8Exception cloudError0(int status, Object body, String method, String path, String retryAfter) {
     String code = null;
     Object msgBody = body;
     if (body instanceof Map<?, ?> m) {

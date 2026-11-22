@@ -17,6 +17,8 @@ public class Kosa8Exception extends RuntimeException {
   private final Object body;
   private String code;
   private Double retryAfterS;
+  private String requestId;
+  private String detail = "";
 
   public Kosa8Exception(String message) {
     this(message, 0, null, null, null, null, null, null);
@@ -52,6 +54,33 @@ public class Kosa8Exception extends RuntimeException {
 
   Kosa8Exception withCode(String c) {
     code = c;
+    return this;
+  }
+
+  /**
+   * The id of the request that failed, to quote to kosa8 support: the answer's X-Request-Id header, else
+   * Cloudflare's cf-ray; null when there was no answer or it had neither.
+   */
+  public String requestId() { return requestId; }
+
+  Kosa8Exception withRequestId(String id) {
+    requestId = id == null || id.isBlank() ? null : id.strip();
+    return this;
+  }
+
+  /**
+   * For a kosa8 Cloud answer, the server's sentence followed by what to act on:
+   * {@code "<sentence> [HTTP 503 no_capacity; retry in 10 s; request a5e7...-BOS]"}. The bare sentence is
+   * {@link #daemonMessage()}.
+   */
+  @Override
+  public String getMessage() {
+    String m = super.getMessage();
+    return detail.isEmpty() ? m : (m == null ? "" : m) + detail;
+  }
+
+  Kosa8Exception withDetail(String d) {
+    detail = d == null ? "" : d;
     return this;
   }
 
