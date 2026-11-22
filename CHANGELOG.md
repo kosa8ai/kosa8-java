@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2 — unreleased
+
+- **Actionable errors.** A kosa8 Cloud error's `getMessage()` is the server's sentence followed by what to act on,
+  e.g. `no host has room right now [HTTP 503 no_capacity; retry in 10 s; request a5e77ddee9ef8120-BOS]`; a 402 adds
+  `upgrade: <url>` when the sentence lacks it, and a 401 adds "check KOSA8_API_KEY; make a new key at
+  https://app.kosa8.com/app#keys". The bare sentence is still `daemonMessage()`.
+- `Kosa8Exception.requestId()`: the answer's `X-Request-Id`, else Cloudflare's `cf-ray`, to quote to support.
+- Client-side errors say what to do next: a missing or malformed key points at `KOSA8_API_KEY` and
+  https://app.kosa8.com/app#keys, a timeout at retrying or `builder().timeout(Duration)`, a connection failure at the
+  network and `KOSA8_CLOUD_URL`.
+
 ## 0.5.1
 
 - Failure class `oom`: exit 137 with the guest kernel's OOM count raised (kosa8 Cloud reports it on exec and grade; a grade killed for memory has no reward). It can be added to a rollout mask.

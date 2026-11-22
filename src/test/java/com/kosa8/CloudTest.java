@@ -167,7 +167,8 @@ public final class CloudTest extends ClientTest {
       var p = raises(Kosa8Exception.PaymentRequiredException.class, () -> cloud.sandboxes().create());
       check(p instanceof Kosa8Exception.ApiException, "an ApiException");
       eq("payment_required", p.code(), "code");
-      eq("add a payment method to start running work", p.getMessage(), "message");
+      eq("add a payment method to start running work", p.daemonMessage(), "the server's sentence");
+      eq("add a payment method to start running work [HTTP 402 payment_required]", p.getMessage(), "message");
       eq(402, p.status(), "status");
       eq("payment_required", ((Map<?, ?>) p.body()).get("error"), "raw body kept");
       var q = raises(Kosa8Exception.RateLimitException.class, () -> cloud.sandboxes().create());
@@ -175,7 +176,81 @@ public final class CloudTest extends ClientTest {
       var n = raises(Kosa8Exception.NotFoundException.class, () -> cloud.sandboxes().get("sbx_x"));
       eq("not_found", n.code(), "404 code");
       var a = raises(Kosa8Exception.AuthException.class, () -> cloud.me());
-      eq("unauthorized", a.getMessage(), "no message: the code");
+      eq("unauthorized", a.daemonMessage(), "no message: the code");
+      check(a.getMessage().startsWith("unauthorized (check KOSA8_API_KEY"), a.getMessage());
+    }
+  }
+
+  public void testCloudErrorsSayWhatToDo() throws Exception {
+    Map<String, Object> cap = new LinkedHashMap<>(Map.of("error", "no_capacity", "message", "no host has room for 4 CPUs right now",
+        "retryable", true, "retry_after_s", 10, "failure_class", "infra"));
+    Map<String, Object> building = new LinkedHashMap<>(Map.of("error", "template_building",
+        "message", "the environment of swe/django-1 is being built; ready in about 120 s", "eta_s", 120, "retry_after_s", 30,
+        "failure_class", "quota", "retryable", true));
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(503, cap, Map.of("Retry-After", "10", "cf-ray", "a5e77ddee9ef8120-BOS")),
+        new Answer(409, building),
+        new Answer(402, Map.of("error", "plan_required", "message", "pick a plan to run sandboxes",
+            "upgrade_url", "https://app.kosa8.com/app#billing", "agent_message", "Tell the person to pick a plan.")),
+        new Answer(401, Map.of("error", "unauthorized", "message", "API key is unknown, revoked or expired"),
+            Map.of("X-Request-Id", "req_123", "cf-ray", "ray-ignored")),
+        new Answer(501, Map.of("error", "not_available", "message", "background commands are not available on this sandbox's host yet"))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      Kosa8Cloud cloud = stub.cloud();
+      var c = raises(Kosa8Exception.class, () -> cloud.sandboxes().create());
+      eq(503, c.status(), "status");
+      eq("no_capacity", c.code(), "code");
+      eq(10.0, c.retryAfterSeconds(), "Retry-After on a 503");
+      eq("a5e77ddee9ef8120-BOS", c.requestId(), "cf-ray is the request id");
+      check(c.retryable(), "no_capacity is retryable");
+      eq("no host has room for 4 CPUs right now", c.daemonMessage(), "bare sentence");
+      eq("no host has room for 4 CPUs right now [HTTP 503 no_capacity; retry in 10 s; request a5e77ddee9ef8120-BOS]",
+          c.getMessage(), "message says what to do");
+
+      var b = raises(Kosa8Exception.ConflictException.class, () -> cloud.sandboxes().create());
+      eq("template_building", b.code(), "409 code");
+      eq(30.0, b.retryAfterSeconds(), "body retry_after_s without a header");
+      check(b.retryable(), "template_building is retryable");
+      eq(120L, ((Map<?, ?>) b.body()).get("eta_s"), "eta_s kept in body");
+      check(b.getMessage().endsWith("[HTTP 409 template_building; retry in 30 s]"), b.getMessage());
+      eq(null, b.requestId(), "no request id header");
+
+      var p = raises(Kosa8Exception.PaymentRequiredException.class, () -> cloud.sandboxes().create());
+      eq("https://app.kosa8.com/app#billing", p.upgradeUrl(), "upgrade url");
+      eq("pick a plan to run sandboxes [HTTP 402 plan_required; upgrade: https://app.kosa8.com/app#billing]", p.getMessage(), "402 message");
+      check(!p.retryable(), "402 is not retryable");
+
+      var a = raises(Kosa8Exception.AuthException.class, () -> cloud.me());
+      eq("req_123", a.requestId(), "X-Request-Id wins over cf-ray");
+      eq("API key is unknown, revoked or expired (check KOSA8_API_KEY; make a new key at https://app.kosa8.com/app#keys)"
+          + " [HTTP 401 unauthorized; request req_123]", a.getMessage(), "401 hint");
+
+      var u = raises(Kosa8Exception.UnsupportedException.class, () -> cloud.me());
+      eq("not_available", u.code(), "501 code");
+      check(!u.retryable(), "501 not_available is not retryable");
+      eq("infra", u.failureClass(), "501 is infra");
+      check(u.getMessage().endsWith("[HTTP 501 not_available]"), u.getMessage());
+    }
+  }
+
+  public void testCloudClientErrorsSayWhatToDo() {
+    var e = raises(Kosa8Exception.class, () -> Kosa8Cloud.builder().getenv(x -> null).build());
+    check(e.getMessage().contains("set KOSA8_API_KEY"), e.getMessage());
+    check(e.getMessage().contains("https://app.kosa8.com/app#keys"), e.getMessage());
+    e = raises(Kosa8Exception.class, () -> Kosa8Cloud.builder().apiKey("sk-other").getenv(x -> null).build());
+    check(e.getMessage().contains("https://app.kosa8.com/app#keys"), e.getMessage());
+  }
+
+  public void testCloudTimeoutSaysWhatToDo() throws Exception {
+    try (Stub stub = new Stub(s -> {
+      try { Thread.sleep(1500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+      return new Answer(200, Map.of());
+    })) {
+      Kosa8Cloud cloud = Kosa8Cloud.builder().apiKey(KEY).baseUrl(stub.url()).timeout(Duration.ofMillis(300))
+          .getenv(x -> null).retry(RetryPolicy.NONE).build();
+      var e = raises(Kosa8Exception.TimeoutException.class, cloud::me);
+      check(e.getMessage().contains("timeout(Duration)"), e.getMessage());
+      check(e.retryable(), "a timeout is retryable");
     }
   }
 
@@ -188,6 +263,7 @@ public final class CloudTest extends ClientTest {
         .getenv(x -> null).build();
     var e = raises(Kosa8Exception.ConnectionException.class, cloud::me);
     check(e.getMessage().contains("could not reach kosa8 Cloud"), e.getMessage());
+    check(e.getMessage().contains("KOSA8_CLOUD_URL") && e.getMessage().endsWith("then retry"), e.getMessage());
   }
 
   static List<String> calls(Stub stub) {
@@ -352,7 +428,7 @@ public final class CloudTest extends ClientTest {
     try (Stub stub = new Stub(s -> new Answer(404, Map.of("error", "not_found", "message", "no such file")))) {
       CloudSandbox box = new CloudSandbox(stub.cloud(), sbx("running"));
       var e = raises(Kosa8Exception.NotFoundException.class, () -> box.files().read("/workspace/nope"));
-      eq("no such file", e.getMessage(), "error body parsed, not returned as bytes");
+      eq("no such file", e.daemonMessage(), "error body parsed, not returned as bytes");
     }
   }
 
