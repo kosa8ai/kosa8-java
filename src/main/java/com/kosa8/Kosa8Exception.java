@@ -16,6 +16,7 @@ public class Kosa8Exception extends RuntimeException {
   private final String path;
   private final Object body;
   private String code;
+  private Double retryAfterS;
 
   public Kosa8Exception(String message) {
     this(message, 0, null, null, null, null, null, null);
@@ -52,6 +53,50 @@ public class Kosa8Exception extends RuntimeException {
   Kosa8Exception withCode(String c) {
     code = c;
     return this;
+  }
+
+  /**
+   * How long the server asked to wait before trying again, in seconds: a 429's Retry-After header, or a
+   * body's retry_after_s (409 idempotency_in_progress, 503 no_capacity); null when it gave none.
+   */
+  public Double retryAfterSeconds() { return retryAfterS; }
+
+  Kosa8Exception withRetryAfterSeconds(Double s) {
+    retryAfterS = s;
+    return this;
+  }
+
+  /**
+   * Whose fault this was: ok, exit_nonzero, timeout, infra, quota, client, or error (not a kosa8 failure).
+   * kosa8 Cloud's own failure_class is used when the answer carried one; see {@link #classifyFailure}.
+   */
+  public String failureClass() { return classifyFailure(this).failureClass(); }
+
+  /** Whether the same call may work if sent again (infra failures, rate limits). See {@link #classifyFailure}. */
+  public boolean retryable() { return classifyFailure(this).retryable(); }
+
+  /**
+   * {@code (failureClass, retryable)} for any exception. A kosa8 Cloud error body's failure_class and
+   * retryable are used as sent. Otherwise the server's rules ({@link FailureClass#of}): no answer or a 5xx
+   * (not 501) is infra and retryable; an exec past its limit is timeout; 402, 423 and plan limits are quota;
+   * 429 is quota and retryable unless the quota is used up; any other 4xx is client. 409
+   * idempotency_in_progress is retryable (the first request with that key is still running). An exception
+   * that is not a Kosa8Exception is error (a bug in your code), except I/O failures, which are infra.
+   */
+  public static FailureClass classifyFailure(Throwable t) {
+    if (t instanceof Kosa8Exception k) {
+      if ("idempotency_in_progress".equals(k.code)) return new FailureClass("client", true);
+      if (k.body instanceof Map<?, ?> m && m.get("failure_class") instanceof String fc) {
+        Object rt = m.get("retryable");
+        return new FailureClass(fc, rt instanceof Boolean b ? b : "infra".equals(fc));
+      }
+      if (k instanceof ExecTimeoutException) return new FailureClass("timeout", false);
+      if (k instanceof ConnectionException || k instanceof TimeoutException) return new FailureClass("infra", true);
+      if (k.status == 0) return new FailureClass("error", false);
+      return FailureClass.of(k.status, k.code);
+    }
+    if (t instanceof java.io.IOException || t instanceof java.io.UncheckedIOException) return new FailureClass("infra", true);
+    return new FailureClass("error", false);
   }
 
   /** The daemon is unreachable. */
