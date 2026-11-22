@@ -55,5 +55,11 @@ public final class CloudPreviews {
     return one(sb.cloud().request("POST", sb.p("/previews/" + check(port) + "/rotate"), new LinkedHashMap<>()));
   }
 
-  public void delete(int port) { sb.cloud().request("DELETE", sb.p("/previews/" + check(port)), null); }
+  /** Close the port's preview. */
+  public void delete(int port) {
+    sb.cloud().request("DELETE", String.format("/v1/sandboxes/%s/previews/%d", Transport.enc(sb.id()), check(port)), null);
+  }
+
+  /** The port's custom domains: serve its preview at your own hostname. */
+  public CloudPreviewDomains domains(int port) { return new CloudPreviewDomains(sb.cloud(), null, sb.id(), check(port)); }
 }

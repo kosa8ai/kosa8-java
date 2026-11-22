@@ -106,7 +106,7 @@ public class Kosa8Exception extends RuntimeException {
 
   /**
    * {@code (failureClass, retryable)} for any exception. A kosa8 Cloud error body's failure_class and
-   * retryable are used as sent. Otherwise the server's rules ({@link FailureClass#of}): no answer or a 5xx
+   * retryable are used as sent (retryable alone too). Otherwise the server's rules ({@link FailureClass#of}): no answer or a 5xx
    * (not 501) is infra and retryable; an exec past its limit is timeout; 402, 423 and plan limits are quota;
    * 429 is quota and retryable unless the quota is used up; any other 4xx is client. 409
    * idempotency_in_progress is retryable (the first request with that key is still running). An exception
@@ -118,6 +118,10 @@ public class Kosa8Exception extends RuntimeException {
       if (k.body instanceof Map<?, ?> m && m.get("failure_class") instanceof String fc) {
         Object rt = m.get("retryable");
         return new FailureClass(fc, rt instanceof Boolean b ? b : "infra".equals(fc));
+      }
+      if (k.body instanceof Map<?, ?> m && m.get("retryable") instanceof Boolean rb && k.status != 0) {
+        // The server's own word on retrying, without a class: kept, with the class from status and code.
+        return new FailureClass(FailureClass.of(k.status, k.code).failureClass(), rb);
       }
       if (k instanceof ExecTimeoutException) return new FailureClass("timeout", false);
       if (k instanceof ConnectionException || k instanceof TimeoutException) return new FailureClass("infra", true);
