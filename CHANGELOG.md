@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3
 
 - `CloudSandbox.exec(cmd, image, env, timeoutS)` (String or argv): the API's exec `timeout_s` (1 to 90) stops the command in the sandbox when it runs that long and throws `ExecTimeoutException` (without the hint about the 90 s buffered limit). Python, JS, Go and Ruby have the same option. Any other value is an `IllegalArgumentException` before the call. The three-argument `exec` is unchanged.
 - README: the install snippets name 0.5.2, the version on Maven Central (they said 0.5.0, and that Central had only 0.3.1); what persists between commands (only `/workspace`, unless the sandbox is persistent) matches the server; a "same thing in each language" table for the five SDKs.
