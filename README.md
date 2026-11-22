@@ -12,17 +12,17 @@ Maven:
 <dependency>
   <groupId>com.kosa8</groupId>
   <artifactId>kosa8</artifactId>
-  <version>0.5.3</version>
+  <version>0.6.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation "com.kosa8:kosa8:0.5.3"
+implementation "com.kosa8:kosa8:0.6.0"
 ```
 
-0.5.3 is the latest release on Maven Central
+0.6.0 is the latest release on Maven Central
 ([com.kosa8:kosa8](https://central.sonatype.com/artifact/com.kosa8/kosa8)); the CHANGELOG lists what each version added.
 
 ## kosa8 Cloud quickstart
@@ -107,7 +107,10 @@ List<CloudPort> ports = box.ports();                            // TCP ports lis
 
 These need the host's data plane. On hosts without it the API answers 501 (`not_available` /
 `not_supported`), thrown as `Kosa8Exception.UnsupportedException`. Not every kosa8 Cloud host has it
-yet; `exec`, `sleep`, `wake`, `update` and `delete` work everywhere.
+yet; `exec`, `update` and `delete` work everywhere. A sandbox placed on kosa8's overflow capacity
+(Cloudflare, used when kosa8's own hosts have no room) has no fork, checkpoint, rewind or sleep: those
+calls throw `UnsupportedException` with code `not_available` and the server's reason; the SDK does not
+emulate them.
 
 ### Sized and Docker sandboxes, env, snapshots
 
@@ -117,12 +120,18 @@ CloudSandbox box = cloud.sandboxes().create(new CloudOptions.Create()
     .env(Map.of("NODE_ENV", "production")).name("web").labels(Map.of("team", "a")).ttlSeconds(3600));
 // a sized create boots cold; create waits until it runs (.noWait() to skip)
 
+// Small sizes for fleets of mostly idle sandboxes (RL rollouts, evals): a fraction of a shared vCPU,
+// bursting while the host is idle. 0.25 vCPU and 512 MiB; also .size("0.25x0.5"), "0.5x1", "1x2".
+CloudSandbox tiny = cloud.sandboxes().create(new CloudOptions.Create().cpus(0.25, 512).ttlSeconds(600));
+
 CloudSnapshot snap = box.snapshot("warm");          // durable: kept until deleted
 CloudSandbox copy = cloud.sandboxes().create(new CloudOptions.Create().snapshot(snap.id()));
 cloud.snapshots().delete(snap.id());                // also list, get
 ```
 
-Also `cpus(cpus, memMb)`, `diskGb`, `persistent`, `cpu("dedicated")`, `region` (`us`, `eu` or an
+Sizes: `CloudOptions.CREATE_SIZES` (`0.25x0.5`, `0.5x1`, `1x2`, `2x4`, `4x8`, `8x16`, `16x32`); template builds take
+the standard ones (`CloudOptions.SIZES`). Also `cpus(cpus, memMb)`, `record(true)` (desktop recording),
+`aiGateway(true)`, `diskGb`, `persistent`, `cpu("dedicated")`, `region` (`us`, `eu` or an
 id), `secrets` and `egress`. `CloudOptions.List` takes `name` and `labels`.
 
 ### Background commands, previews, terminal and more
@@ -142,6 +151,9 @@ box.terminal(120, 40, null).get("url");                          // a wss:// PTY
 - `runCode("print(6*7)", "a", null)` (stateful Python; persistent sandbox with python3),
   `codeContexts`, `createCodeContext`, `resetCodeContext`, `deleteCodeContext`.
 - `schedules().create("0 * * * *", List.of("date"))`, `list`, `run`, `delete`.
+- `stopBackground(execId)` (SIGTERM, then SIGKILL), `embeds().create(origins, mode, ui, ttlS, command)` /
+  `list` / `revoke` (signed iframe URLs), `recordings()`, `previews().domains(port)` (`list`, `add`, `get`,
+  `remove`: custom domains; also `cloud.previewDomains(previewId)`), `previews().delete(port)`.
 - `metrics()`, `logs(limit)`, `setLabels`, `secrets()`; `cloud.capabilities()`.
 
 ### Secrets and Pipelines
@@ -172,14 +184,49 @@ System.out.println(out.get("ok") + " " + out.get("result")); // true {hello=kosa
 Also: `cloud.me()`, `cloud.usage()`, `cloud.templates()`, `sandboxes().get(id)`, `box.wake()` / `refresh()`,
 `functions().list()` / `get` / `delete` / `map(name, events, concurrency)`.
 
+### Browsers, AI gateway, jobs and benchmarks
+
+```java
+try (CloudBrowser b = cloud.browsers().create(120, null, null)) {   // $0.12 per browser-hour, per second
+  byte[] png = b.screenshot("https://example.com", false);
+  String cdp = b.cdpUrl();                                        // Playwright: chromium().connectOverCDP(cdp)
+}
+
+cloud.ai().setKey("openai", key);                                 // sealed; never sent back
+String base = cloud.ai().gatewayUrl("openai");                    // https://api.kosa8.com/v1/ai/gw/openai/
+cloud.ai().usage();                                               // also settings, updateSettings, keys, deleteKey, call
+
+Map<String, Object> job = cloud.jobs().submit(Map.of(
+    "name", "eval-1", "template", "python", "tasks", List.of(Map.of("id", "t1", "input", "2+2")),
+    "solver", Map.of("cmd", "python solve.py", "timeout_s", 300), "grader", Map.of("cmd", "python grade.py")));
+job = cloud.jobs().waitFor((String) job.get("id"), Duration.ofHours(2), Duration.ofSeconds(10));
+                                                                  // also estimate, list, get, cancel
+cloud.benchmarks().list();                                        // instances, instance, prepare
+```
+
+Also on `cloud`: `recordings()` (`list`, `link`, `delete`), `webhooks()` (`create`, `list`, `delete`,
+`deliveries`, `test`), `apiKeys()` (`list`, `create`, `revoke`, `rotate`), `audit()` (`list`, `verify`,
+`export`), `rl()` (`compare`, `alerts`, `createAlert`, `updateAlert`, `deleteAlert`), `limits()`,
+`requestLimit`, `usageInsights()`, `pricing()`, `checkpoints()`, `lineage()`, `images()`, `orgEgress()` /
+`setOrgEgress` / `clearOrgEgress`, `burst()` / `activateBurst`, `attackScorecards()`, and `functions().invocations(name, limit)`.
+
+### Retries
+
+Every request retries with exponential backoff and full jitter (3 tries by default, `RetryPolicy`), waiting
+at least the server's `Retry-After` (the header, or `retry_after` / `retry_after_s` in the body). Reads,
+PUTs and deletes retry on infra failures; creates, forks, grades and job submits carry an Idempotency-Key
+reused on every retry. Any call, a plain POST included, retries on 429, on 503 `database_busy` and on 409
+`template_building`, which the server sends before doing anything. An answer with `retryable: false` is not
+retried. `Kosa8Cloud.builder().retry(RetryPolicy.NONE)` turns it off.
+
 ### The base template
 
 The default template, `base`, is **Alpine Linux**: `sh` is busybox, and there is no bash, python or
 git. Use `template("python")` (or another key from `cloud.templates()`) for Python.
 
-- **Only `/workspace` is sure to persist between commands.** An exec may run in a fresh container, so
-  `cd`, `export`, processes it leaves running and packages installed elsewhere may be gone by the next
-  exec. Install packages into `/workspace` (for example `pip install --target /workspace/lib ...`), or
+- **Each exec is a fresh process; files in `/workspace` persist for the sandbox's life.** An exec may
+  also run in a fresh container, so `cd`, `export`, processes it leaves running and packages installed
+  outside `/workspace` may be gone by the next exec; installed packages need `.persistent(true)`. Install packages into `/workspace` (for example `pip install --target /workspace/lib ...`), or
   create with `.persistent(true)` (one long-lived container) to keep the whole filesystem and background
   processes; the code interpreter (`runCode`) needs it, and it counts against your plan's
   persistent-sandbox limit.

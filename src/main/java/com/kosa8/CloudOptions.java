@@ -20,6 +20,14 @@ public final class CloudOptions {
   public static final int MAX_FORK = 100;
   /** The sizes a sized create takes: vCPU x GiB. */
   public static final java.util.List<String> SIZES = java.util.List.of("2x4", "4x8", "8x16", "16x32");
+  /**
+   * The small sizes a sandbox create also takes (not a template build): a fraction of a shared vCPU reserved,
+   * bursting above it while the host has idle CPU, for fleets of mostly idle sandboxes. 0.25x0.5 is cpus 0.25
+   * and 512 MiB. Only hosts that run small sizes take them; elsewhere the create answers 501.
+   */
+  public static final java.util.List<String> SMALL_SIZES = java.util.List.of("0.25x0.5", "0.5x1", "1x2");
+  /** Every size a sandbox create takes: {@link #SMALL_SIZES} then {@link #SIZES}. */
+  public static final java.util.List<String> CREATE_SIZES = java.util.List.of("0.25x0.5", "0.5x1", "1x2", "2x4", "4x8", "8x16", "16x32");
   /** At most this many env variables on a create, each value at most 8 KiB. */
   public static final int MAX_ENV = 64;
   /** At most this many labels, each value at most 256 characters. */
@@ -40,10 +48,12 @@ public final class CloudOptions {
     Long deleteAfter;
     Double acceptPrice;
     String size;
-    Integer cpus;
+    Number cpus;
     Integer memMb;
     String image;
     Integer diskGb;
+    Boolean record;
+    Boolean aiGateway;
     Boolean persistent;
     Boolean docker;
     String cpu;
@@ -58,12 +68,26 @@ public final class CloudOptions {
     boolean noWait;
 
     /**
-     * vCPU x GiB: one of {@link CloudOptions#SIZES}. A size, cpus+memMb, image or diskGb boots the
-     * sandbox cold at that size; create waits for it unless {@link #noWait()}.
+     * vCPU x GiB: one of {@link CloudOptions#CREATE_SIZES}, e.g. "4x8", or a small size such as "0.25x0.5". A
+     * size, cpus+memMb, image or diskGb boots the sandbox cold at that size; create waits for it unless
+     * {@link #noWait()}.
      */
     public Create size(String v) { size = v; return this; }
     /** Or: a size by its parts (4 and 8192 for 4x8). */
     public Create cpus(int cpus, int memMb) { this.cpus = cpus; this.memMb = memMb; return this; }
+    /** Or: a small size by its parts (0.25 and 512 for 0.25x0.5, 0.5 and 1024 for 0.5x1). */
+    public Create cpus(double cpus, int memMb) {
+      this.cpus = cpus == Math.rint(cpus) ? (Number) (int) cpus : (Number) cpus;
+      this.memMb = memMb;
+      return this;
+    }
+    /** Record its desktop session; the MP4 is saved when it is deleted ({@code cloud.recordings()}). */
+    public Create record(boolean v) { record = v; return this; }
+    /**
+     * Route its model calls through the org's AI gateway ({@code cloud.ai()}): OPENAI_BASE_URL,
+     * ANTHROPIC_BASE_URL, KOSA8_AI_GATEWAY_URL and KOSA8_AI_TOKEN are set in its env.
+     */
+    public Create aiGateway(boolean v) { aiGateway = v; return this; }
     /** An OCI image to run, e.g. kosa8-template/universal-24.04-20261115.2 (default size 2x4). */
     public Create image(String v) { image = v; return this; }
     /** The data disk holding / and /workspace, 8 to 200 GB (default 32). */
@@ -131,10 +155,12 @@ public final class CloudOptions {
       }
       if (acceptPrice != null) b.put("accept_price", acceptPrice);
       if (size != null) {
-        if (!SIZES.contains(size)) throw new IllegalArgumentException("size must be one of " + SIZES + ", not " + size);
+        if (!CREATE_SIZES.contains(size)) throw new IllegalArgumentException("size must be one of " + CREATE_SIZES + ", not " + size);
         b.put("size", size);
       }
       if (cpus != null) {
+        double c = cpus.doubleValue();
+        if (!(c > 0) || memMb == null || memMb <= 0) throw new IllegalArgumentException("cpus and memMb must be positive, e.g. 0.25 and 512");
         if (size != null) throw new IllegalArgumentException("give size or cpus and memMb, not both");
         b.put("cpus", cpus);
         b.put("mem_mb", memMb);
@@ -146,6 +172,8 @@ public final class CloudOptions {
       }
       if (persistent != null) b.put("persistent", persistent);
       if (docker != null) b.put("docker", docker);
+      if (record != null) b.put("record", record);
+      if (aiGateway != null) b.put("ai_gateway", aiGateway);
       if (cpu != null) {
         if (!cpu.equals("shared") && !cpu.equals("dedicated")) throw new IllegalArgumentException("cpu must be shared or dedicated, not " + cpu);
         b.put("cpu", cpu);

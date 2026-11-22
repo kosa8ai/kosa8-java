@@ -142,7 +142,26 @@ public final class CloudSandbox {
   /** A background command: running or exited, its exit code and its output so far. */
   public CloudBackgroundExec backgroundExec(String execId) {
     if (execId == null || execId.isEmpty()) throw new IllegalArgumentException("backgroundExec needs an exec id (bg_...)");
-    return CloudBackgroundExec.of(Kosa8Cloud.obj(Kosa8Cloud.obj(cloud.request("GET", p("/exec/" + Transport.enc(execId)), null)).get("exec")));
+    String path = String.format("/v1/sandboxes/%s/exec/%s", Transport.enc(id()), Transport.enc(execId));
+    return CloudBackgroundExec.of(Kosa8Cloud.obj(Kosa8Cloud.obj(cloud.request("GET", path, null)).get("exec")));
+  }
+
+  /**
+   * Stop a background command and what it started (SIGTERM, then SIGKILL after 5 s). Its state is stopping, or
+   * exited when it had already ended; {@link #backgroundExec} then reports its exit code (143 or 137).
+   */
+  public CloudBackgroundExec stopBackground(String execId) {
+    if (execId == null || execId.isEmpty()) throw new IllegalArgumentException("stopBackground needs an exec id (bg_...)");
+    String path = String.format("/v1/sandboxes/%s/exec/%s/stop", Transport.enc(id()), Transport.enc(execId));
+    return CloudBackgroundExec.of(Kosa8Cloud.obj(Kosa8Cloud.obj(cloud.request("POST", path, new LinkedHashMap<>())).get("exec")));
+  }
+
+  /** Its embeds: signed, expiring iframe URLs for its terminal or desktop. */
+  public CloudEmbeds embeds() { return new CloudEmbeds(cloud, id()); }
+
+  /** Its desktop recordings (made when it is deleted, for a sandbox created with record). */
+  public List<Map<String, Object>> recordings() {
+    return Kosa8Cloud.objs(Kosa8Cloud.obj(cloud.request("GET", p("/recordings"), null)).get("recordings"));
   }
 
   /** Poll a background command every interval until it exits; TimeoutException after timeout. */
@@ -238,7 +257,9 @@ public final class CloudSandbox {
 
   public void resetCodeContext(String name) { cloud.request("POST", p("/code/contexts/" + Transport.enc(name) + "/reset"), new LinkedHashMap<>()); }
 
-  public void deleteCodeContext(String name) { cloud.request("DELETE", p("/code/contexts/" + Transport.enc(name)), null); }
+  public void deleteCodeContext(String name) {
+    cloud.request("DELETE", String.format("/v1/sandboxes/%s/code/contexts/%s", Transport.enc(id()), Transport.enc(name)), null);
+  }
 
   /** CPU, memory, disk and network use, read on the host. */
   public Map<String, Object> metrics() { return Kosa8Cloud.obj(Kosa8Cloud.obj(cloud.request("GET", p("/metrics"), null)).get("metrics")); }

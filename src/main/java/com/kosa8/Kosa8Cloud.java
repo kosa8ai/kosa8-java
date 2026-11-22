@@ -53,6 +53,15 @@ public final class Kosa8Cloud {
   private final Pipelines pipelines = new Pipelines();
   private final OrgTemplates orgTemplates = new OrgTemplates();
   private final Tokens tokens = new Tokens();
+  private final CloudBrowsers browsers = new CloudBrowsers(this);
+  private final CloudAi ai = new CloudAi(this);
+  private final CloudJobs jobs = new CloudJobs(this);
+  private final CloudBenchmarks benchmarks = new CloudBenchmarks(this);
+  private final CloudRecordings recordings = new CloudRecordings(this);
+  private final CloudWebhooks webhooks = new CloudWebhooks(this);
+  private final CloudApiKeys apiKeys = new CloudApiKeys(this);
+  private final CloudAudit audit = new CloudAudit(this);
+  private final CloudRl rl = new CloudRl(this);
 
   private Kosa8Cloud(String key, String baseUrl, Duration timeout, RetryPolicy retry, java.util.function.Consumer<Duration> sleeper) {
     this.key = key;
@@ -88,8 +97,10 @@ public final class Kosa8Cloud {
     /**
      * Retries for every request where trying again is safe (default {@link RetryPolicy#DEFAULT}, 3 tries with
      * backoff and jitter): reads, PUTs, deletes, heartbeats and drains on infra failures; the calls that make
-     * sandboxes (create, batch, fork, grade), which carry an Idempotency-Key reused on every retry; and any
-     * request answered 429, waiting at least its Retry-After. {@link RetryPolicy#NONE} turns it off.
+     * sandboxes (create, batch, fork, grade), a job submit and a rollout flush, which carry an Idempotency-Key
+     * reused on every retry; and any request answered 429, 503 database_busy or 409 template_building (refused
+     * before anything ran), waiting at least its Retry-After (header, or retry_after / retry_after_s in the body).
+     * An answer whose body says retryable: false is not retried. {@link RetryPolicy#NONE} turns it off.
      */
     public Builder retry(RetryPolicy v) { retry = v == null ? RetryPolicy.NONE : v; return this; }
     /** How retries wait (default Thread.sleep); for tests. */
@@ -153,6 +164,143 @@ public final class Kosa8Cloud {
 
   /** Short-lived capability tokens to hand a sandbox to someone without the API key. */
   public Tokens tokens() { return tokens; }
+
+  /** Headless Chromium on demand, driven over CDP ($0.12 per browser-hour, billed per second). */
+  public CloudBrowsers browsers() { return browsers; }
+
+  /** The org's AI gateway: provider keys kept server-side, caching, a rate limit and usage. */
+  public CloudAi ai() { return ai; }
+
+  /** Hosted jobs: kosa8 runs every task's rollout (solver, then a sealed grader) itself. */
+  public CloudJobs jobs() { return jobs; }
+
+  /** Ready-made benchmarks (SWE-bench Verified and others) and their instances' environments. */
+  public CloudBenchmarks benchmarks() { return benchmarks; }
+
+  /** Desktop session recordings (MP4), made when a sandbox created with record is deleted. */
+  public CloudRecordings recordings() { return recordings; }
+
+  /** Signed webhook endpoints for the org's events. */
+  public CloudWebhooks webhooks() { return webhooks; }
+
+  /** The org's API keys: list, create, revoke and rotate. */
+  public CloudApiKeys apiKeys() { return apiKeys; }
+
+  /** The org's hash-chained audit log. */
+  public CloudAudit audit() { return audit; }
+
+  /** RL run comparison and alert rules (a run itself is {@link Run}). */
+  public CloudRl rl() { return rl; }
+
+  /**
+   * A preview's custom domains by its preview id (from {@link CloudPreview}); the same as
+   * {@code box.previews().domains(port)}.
+   */
+  public CloudPreviewDomains previewDomains(String previewId) {
+    if (previewId == null || previewId.isEmpty()) throw new IllegalArgumentException("a preview id is required");
+    return new CloudPreviewDomains(this, previewId, null, 0);
+  }
+
+  /** Agent attack scorecards the org uploaded (from {@code kosa8 attack run}), newest first; limit may be null. */
+  public List<Map<String, Object>> attackScorecards(Integer limit) {
+    return objs(obj(request("GET", "/v1/attack/scorecards" + (limit == null ? "" : "?limit=" + limit), null)).get("scorecards"));
+  }
+
+  /** One attack scorecard, with the signed file as uploaded. */
+  public Map<String, Object> attackScorecard(String id) {
+    return obj(obj(request("GET", "/v1/attack/scorecards/" + Transport.enc(id), null)).get("scorecard"));
+  }
+
+  /**
+   * Upload a signed scorecard (the file {@code kosa8 attack run} wrote, as JSON text or parsed); its signature is
+   * checked before it is stored.
+   */
+  public Map<String, Object> uploadAttackScorecard(Object signed) {
+    Object s = signed;
+    if (signed instanceof String text) {
+      try {
+        s = Json.parse(text);
+      } catch (RuntimeException e) {
+        throw new IllegalArgumentException("the signed scorecard is not JSON");
+      }
+    }
+    if (!(s instanceof Map<?, ?>)) throw new IllegalArgumentException("the signed scorecard must be a JSON object");
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("signed", s);
+    return obj(obj(request("POST", "/v1/attack/scorecards", b)).get("scorecard"));
+  }
+
+  /** The running-sandbox limit: how many are active, the limit, and the last request for more. */
+  public Map<String, Object> limits() { return obj(request("GET", "/v1/limits", null)); }
+
+  /**
+   * Ask kosa8 for a higher running-sandbox limit (maxRunning, with a reason); kosa8 answers the org's owner by
+   * email. Answers the request as stored.
+   */
+  public Map<String, Object> requestLimit(int maxRunning, String reason) {
+    if (maxRunning < 1) throw new IllegalArgumentException("maxRunning must be at least 1");
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("max_running", maxRunning);
+    if (reason != null) b.put("reason", reason);
+    return obj(request("POST", "/v1/limits/request", b));
+  }
+
+  /** Daily spend this month, top sandboxes, credit left and the projected month-end spend. */
+  public Map<String, Object> usageInsights() { return obj(request("GET", "/v1/usage/insights", null)); }
+
+  /** The public rate card: plans, sizes and per-hour prices. */
+  public Map<String, Object> pricing() { return obj(request("GET", "/v1/pricing", null)); }
+
+  /**
+   * Checkpoints of every running or sleeping sandbox (up to 25), each asked of its host:
+   * {dataplane, sandboxes: [{id, checkpoints, max, ...}], truncated, notes}.
+   */
+  public Map<String, Object> checkpoints() { return obj(request("GET", "/v1/checkpoints", null)); }
+
+  /** Sandboxes with their fork parents, for drawing the fork tree: {nodes, roots, forked}. */
+  public Map<String, Object> lineage() { return obj(request("GET", "/v1/lineage", null)); }
+
+  /** The images behind the templates the org's hosts offer, with tag and digest. */
+  public List<Map<String, Object>> images() { return objs(obj(request("GET", "/v1/images", null)).get("images")); }
+
+  /** The org's default egress policy and whether it is enforced as a ceiling; null when none is set (open internet). */
+  public Map<String, Object> orgEgress() {
+    Object e = obj(request("GET", "/v1/org/egress", null)).get("egress");
+    return e instanceof Map<?, ?> ? obj(e) : null;
+  }
+
+  /**
+   * Set the org's default egress policy (an admin key): the same fields as {@link CloudSandbox#setEgress}; with
+   * enforce it is a ceiling no sandbox may widen. Returns the answer.
+   */
+  public Map<String, Object> setOrgEgress(boolean internet, List<String> allow, List<String> deny, List<String> presets, boolean enforce) {
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("default", CloudOptions.egressBody(internet, allow, deny, presets));
+    b.put("enforce", enforce);
+    return obj(request("PUT", "/v1/org/egress", b));
+  }
+
+  /** Clear the org's default egress policy (back to the open internet). */
+  public Map<String, Object> clearOrgEgress() {
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("default", null);
+    return obj(request("PUT", "/v1/org/egress", b));
+  }
+
+  /** Burst Passes: the pass (null when none is sold here), the passes held and those running. */
+  public Map<String, Object> burst() { return obj(request("GET", "/v1/billing/burst", null)); }
+
+  /**
+   * Activate quantity Burst Passes (an owner's admin key); each raises the running limit for its hours. Holding
+   * fewer, the answer is a checkout url for the rest. 404 not_available when none is sold, 409 burst_cap past
+   * max_active, 402 plan_required without a plan.
+   */
+  public Map<String, Object> activateBurst(int quantity) {
+    if (quantity < 1) throw new IllegalArgumentException("quantity must be at least 1");
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("quantity", quantity);
+    return obj(request("POST", "/v1/billing/burst", b));
+  }
 
   /** The retry policy in use. */
   public RetryPolicy retryPolicy() { return retry; }
@@ -221,7 +369,8 @@ public final class Kosa8Cloud {
     return send(method, path, null, data, false, null);
   }
 
-  private static final java.util.regex.Pattern KEYED = java.util.regex.Pattern.compile("^/v1/sandboxes(/batch|/[A-Za-z0-9_]{1,64}/(fork|grade))?$");
+  private static final java.util.regex.Pattern KEYED = java.util.regex.Pattern.compile(
+      "^/v1/(sandboxes(/batch|/[A-Za-z0-9_]{1,64}/(fork|grade))?|jobs|rl/runs/[A-Za-z0-9_]{1,64}/rollouts)$");
   private static final java.util.regex.Pattern KEY_RE = java.util.regex.Pattern.compile("^[\\x21-\\x7e]{1,255}$");
   private static final java.util.Set<String> SAFE = java.util.Set.of("GET", "HEAD", "PUT", "DELETE");
 
@@ -246,10 +395,20 @@ public final class Kosa8Cloud {
       try {
         return sendOnce(method, path, body, raw, rawAnswer, idem);
       } catch (Kosa8Exception e) {
-        if (!retry.shouldRetry(e, attempt) || !(safe || e.status() == 429)) throw e;
+        if (!retry.shouldRetry(e, attempt) || !(safe || rejectedBeforeRunning(e))) throw e;
         sleeper.accept(retry.delay(e, attempt));
       }
     }
+  }
+
+  /**
+   * Answers the server sends before it has done anything, so even a POST that is not idempotent may be sent
+   * again: 429 (a rate limit), 503 database_busy (the database was overloaded before the call ran) and 409
+   * template_building (a benchmark environment is still being built). Each carries Retry-After.
+   */
+  static boolean rejectedBeforeRunning(Kosa8Exception e) {
+    return e.status() == 429 || (e.status() == 503 && "database_busy".equals(e.code()))
+        || (e.status() == 409 && "template_building".equals(e.code()));
   }
 
   private Object sendOnce(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey) {
@@ -374,7 +533,11 @@ public final class Kosa8Cloud {
     Duration ra = parseRetryAfter(retryAfter);
     if (e instanceof Kosa8Exception.RateLimitException rl) rl.withRetryAfter(ra);
     if (ra != null) e.withRetryAfterSeconds(ra.toMillis() / 1000.0);
-    else if (body instanceof Map<?, ?> m && m.get("retry_after_s") instanceof Number n && n.doubleValue() > 0) e.withRetryAfterSeconds(n.doubleValue());
+    else if (body instanceof Map<?, ?> m) {
+      // retry_after_s on most answers; retry_after (seconds) on 503 database_busy.
+      Object n = m.get("retry_after_s") instanceof Number x ? x : m.get("retry_after");
+      if (n instanceof Number x && x.doubleValue() > 0) e.withRetryAfterSeconds(x.doubleValue());
+    }
     return e;
   }
 
@@ -757,7 +920,7 @@ public final class Kosa8Cloud {
 
     /** One artifact's bytes (a .tar.gz). */
     public byte[] downloadArtifact(String id, String job, int idx) {
-      return requestBytes("GET", p(id, "/artifacts/" + Transport.enc(job) + "/" + idx));
+      return requestBytes("GET", String.format("/v1/pipelines/runs/%s/artifacts/%s/%d", Transport.enc(id), Transport.enc(job), idx));
     }
 
     /**
@@ -812,6 +975,16 @@ public final class Kosa8Cloud {
 
     /** One call per event, at most concurrency at once (null: the cloud's default); results in input order. */
     public Map<String, Object> map(String name, List<?> events, Integer concurrency) {
+      return mapCall(name, events, concurrency);
+    }
+
+    /** Its recent calls, newest first (limit null: the server's default): id, trigger, status, version, timings, error. */
+    public List<Map<String, Object>> invocations(String name, Integer limit) {
+      String q = limit == null ? "" : "?limit=" + limit;
+      return objs(obj(request("GET", String.format("/v1/functions/%s/invocations", Transport.enc(name)) + q, null)).get("invocations"));
+    }
+
+    private Map<String, Object> mapCall(String name, List<?> events, Integer concurrency) {
       Map<String, Object> b = new LinkedHashMap<>();
       b.put("events", events);
       if (concurrency != null) b.put("concurrency", concurrency);

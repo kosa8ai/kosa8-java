@@ -30,7 +30,10 @@ public final class CloudSchedules {
     return Kosa8Cloud.objs(Kosa8Cloud.obj(sb.cloud().request("GET", sb.p("/schedules"), null)).get("schedules"));
   }
 
-  public void delete(String id) { sb.cloud().request("DELETE", sb.p("/schedules/" + Transport.enc(id)), null); }
+  /** Stop and remove a schedule. */
+  public void delete(String id) {
+    sb.cloud().request("DELETE", String.format("/v1/sandboxes/%s/schedules/%s", Transport.enc(sb.id()), Transport.enc(id)), null);
+  }
 
   /** Run it now; returns the run (status, exit, output, ms). */
   public Map<String, Object> run(String id) {

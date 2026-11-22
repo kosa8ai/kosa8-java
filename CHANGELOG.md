@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.0 - 2026-11-22
+
+Java catches up with the Python and JS SDKs on the customer-facing kosa8 Cloud API.
+
+- **Browsers**: `cloud.browsers()` (`create`, `list`, `info`, `get`, `delete`, `cdpUrl`) and `CloudBrowser`
+  (`page`, `goTo`, `screenshot`, `refresh`, `cdpUrl`, `delete`; `AutoCloseable`). $0.12 per browser-hour.
+- **AI gateway**: `cloud.ai()` (`settings`, `updateSettings`, `setKey`, `keys`, `deleteKey`, `usage`,
+  `gatewayUrl(provider)` for pointing an OpenAI/Anthropic client at `/v1/ai/gw/{provider}/`, `call`).
+  `CloudOptions.Create.aiGateway(true)`.
+- **Hosted jobs**: `cloud.jobs()` (`submit` with an Idempotency-Key, `estimate`, `list`, `get`, `cancel`, `waitFor`).
+- **Benchmarks**: `cloud.benchmarks()` (`list`, `get`, `instances`, `instance`, `prepare`).
+- **Background commands**: `CloudSandbox.stopBackground(execId)`.
+- **Recordings, embeds, custom preview domains**: `cloud.recordings()`, `CloudOptions.Create.record(true)`,
+  `box.recordings()`, `box.embeds()`, `box.previews().domains(port)`, `cloud.previewDomains(previewId)`.
+- **Org and account**: `cloud.webhooks()`, `cloud.apiKeys()` (incl. `rotate`), `cloud.audit()` (`list`,
+  `verify`, `export` NDJSON), `cloud.rl()` (`compare`, alert rules), `limits()`, `requestLimit`,
+  `usageInsights()`, `pricing()`, `checkpoints()`, `lineage()`, `images()`, `orgEgress()` / `setOrgEgress` /
+  `clearOrgEgress`, `burst()` / `activateBurst`, `functions().invocations(name, limit)`, `attackScorecards` /
+  `attackScorecard` / `uploadAttackScorecard`.
+- **Small sizes**: `CloudOptions.Create.size("0.25x0.5")` / `"0.5x1"` / `"1x2"` and `cpus(0.25, 512)`
+  (`CloudOptions.SMALL_SIZES`, `CREATE_SIZES`).
+- **Retries**: any request, a plain POST included, is retried with backoff and jitter on 429, 503
+  `database_busy` and 409 `template_building` (refused before anything ran), honouring `Retry-After` and the
+  body's `retry_after` / `retry_after_s`. A body's `retryable` is honoured on its own (`retryable: false` is
+  never retried). `POST /v1/jobs` and rollout flushes carry an Idempotency-Key, so they retry on infra failures too.
+- Overflow sandboxes (kosa8 Cloud's Cloudflare capacity) refuse fork, checkpoint, rewind and sleep with 501
+  `not_available`, thrown as `UnsupportedException` with the server's reason.
+- README: install snippets name 0.6.0; persistence wording matches the API (each exec a fresh process,
+  `/workspace` kept for the sandbox's life, packages need `persistent(true)`).
+
 ## 0.5.3
 
 - `CloudSandbox.exec(cmd, image, env, timeoutS)` (String or argv): the API's exec `timeout_s` (1 to 90) stops the command in the sandbox when it runs that long and throws `ExecTimeoutException` (without the hint about the 90 s buffered limit). Python, JS, Go and Ruby have the same option. Any other value is an `IllegalArgumentException` before the call. The three-argument `exec` is unchanged.
