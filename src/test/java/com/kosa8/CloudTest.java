@@ -53,7 +53,14 @@ public final class CloudTest extends ClientTest {
 
     String url() { return "http://127.0.0.1:" + srv.getAddress().getPort(); }
 
-    Kosa8Cloud cloud() { return Kosa8Cloud.builder().apiKey(KEY).baseUrl(url()).getenv(x -> null).build(); }
+    /** No retries, so a test sees each answer once; RlTest builds its own with retries. */
+    Kosa8Cloud cloud() { return Kosa8Cloud.builder().apiKey(KEY).baseUrl(url()).getenv(x -> null).retry(RetryPolicy.NONE).build(); }
+
+    /** Retries on, waits recorded in sleeps instead of slept. */
+    Kosa8Cloud cloud(List<Duration> sleeps) {
+      return Kosa8Cloud.builder().apiKey(KEY).baseUrl(url()).getenv(x -> null).retry(RetryPolicy.DEFAULT)
+          .sleeper(d -> { synchronized (sleeps) { sleeps.add(d); } }).build();
+    }
 
     @Override
     public void close() { srv.stop(0); }
@@ -199,7 +206,7 @@ public final class CloudTest extends ClientTest {
     eq("https://api.kosa8.com", Kosa8Cloud.DEFAULT_CLOUD_URL, "constant");
     Kosa8Cloud c = Kosa8Cloud.builder().apiKey(KEY).getenv(x -> null).build();
     eq("https://api.kosa8.com", c.baseUrl(), "default with no env");
-    eq("0.4.0", Kosa8Client.VERSION, "version");
+    eq("0.5.0", Kosa8Client.VERSION, "version");
   }
 
   public void testCloudCreateOptions() throws Exception {
@@ -213,7 +220,7 @@ public final class CloudTest extends ClientTest {
       cloud.sandboxes().create(new CloudOptions.Create());
       eq(Map.of(), stub.seen.get(2).body(), "nothing set: empty object");
       check("{}".equals(new String(stub.seen.get(2).raw(), StandardCharsets.UTF_8)), "sends {}");
-      eq("kosa8-java/0.4.0", stub.seen.get(0).headers().get("user-agent"), "user agent");
+      eq("kosa8-java/0.5.0", stub.seen.get(0).headers().get("user-agent"), "user agent");
       int before = stub.seen.size();
       raises(IllegalArgumentException.class, () -> cloud.sandboxes().create(new CloudOptions.Create().ttlSeconds(59)));
       raises(IllegalArgumentException.class, () -> cloud.sandboxes().create(new CloudOptions.Create().ttlSeconds(7_776_001)));

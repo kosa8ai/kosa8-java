@@ -12,17 +12,17 @@ Maven:
 <dependency>
   <groupId>com.kosa8</groupId>
   <artifactId>kosa8</artifactId>
-  <version>0.4.0</version>
+  <version>0.5.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation "com.kosa8:kosa8:0.4.0"
+implementation "com.kosa8:kosa8:0.5.0"
 ```
 
-0.4.0 adds the kosa8 Cloud features below; until it is on Maven Central the latest published
+0.5.0 adds RL training and fan-out (below) to the 0.4.0 Cloud features; until it is on Maven Central the latest published
 version is 0.3.1 (which has `Kosa8Cloud` with create, exec, sleep, wake and delete).
 
 ## kosa8 Cloud quickstart
@@ -185,6 +185,64 @@ git. Use `template("python")` (or another key from `cloud.templates()`) for Pyth
   `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' > /dev/null 2>&1 &")`,
   then read `/workspace/test.exit` later.
 - A request body (command and env) is at most **64 KiB** (413 `too_large`); a file is at most **8 MiB**.
+
+### RL training and fan-out
+
+Many sandboxes at once, leases so a crashed trainer leaks none, a drain, and a sealed grader. Every
+call that makes sandboxes (create, `createMany`, `fork`, `grade`) carries an `Idempotency-Key`
+(yours, or a new UUID) that its retries reuse, so a retry after a timeout or a 5xx makes nothing twice.
+
+```java
+// Up to 1000 in one call, labelled kosa8.run=run-1, deleted 600 s after the last heartbeat.
+SandboxBatch b = cloud.sandboxes().createMany(64, new CloudOptions.Batch()
+    .create(new CloudOptions.Create().template("python")).runId("run-1").leaseS(600).prefix("roll"));
+b.failed();                                   // FanoutFailure: index, code, failureClass, retryable
+SandboxBatch kids = base.fork(new CloudOptions.Fork().n(250).runId("run-1").leaseS(600));
+cloud.sandboxes().heartbeat("run-1");         // push the leases back (every lease / 3)
+cloud.sandboxes().drain("run-1");             // delete every sandbox of the run
+
+// Grade a solved sandbox in a sealed fork: no network, hidden files only there.
+GradeResult g = box.grade(List.of("python", "/grader/test.py"),
+    new CloudOptions.Grade().file("/grader/test.py", hiddenTest).timeoutS(60));
+g.reward();                                   // null when the grader did not finish: mask it, not 0
+
+// fn in a fresh fork per item, 16 at a time; retryable failures retried on a new fork with backoff,
+// every child deleted, even when fn throws.
+List<ForkResult<String, Integer>> rs = cloud.forkMap(base, items, (child, item) -> work(child, item),
+    new CloudOptions.ForkMap().concurrency(16).retries(2).leaseS(600));
+```
+
+An RL run (`Run`) records rollouts on kosa8 Cloud (app.kosa8.com, RL runs), heartbeats its sandboxes
+on a daemon thread, and drains them when it finishes:
+
+```java
+Rollouts rs = Run.with(cloud, "my-grpo-run", new Run.Options().leaseS(600), run ->
+    run.map(base, tasks, (box, task) -> { agent.solve(box, task); return null; },
+        new Run.MapOptions().gradeCmd(List.of("python", "/grader/test.py")).groupSize(8)));
+rs.rewards();   // null where masked (infra, quota, your own exception): leave those out of the gradient
+rs.groups();    // per task, for group-relative advantages
+```
+
+`Run.start(cloud, name, options)` / `Run.attach(cloud, runId, options)` give the run itself:
+`record` (buffered, sent 500 at a time), `flush`, `summary`, `rollouts`, `export`, `drain`,
+`update`, `finish("finished" | "failed")`; `close()` finishes it. Each task's hidden grader files
+are its `"files"` map (or `MapOptions.files(fn)`).
+
+**Errors and retries.** Every `Kosa8Exception` has `failureClass()` (`ok`, `exit_nonzero`,
+`timeout`, `infra`, `quota`, `client`; `error` for your own exceptions), `retryable()` and
+`retryAfterSeconds()`; exec results carry `failureClass()` and `retryable()` too.
+`Kosa8Exception.classifyFailure(t)` classifies any `Throwable`. The client retries (default
+`RetryPolicy.DEFAULT`: 3 tries, exponential backoff with full jitter, at least the server's
+`Retry-After`) only where it is safe: reads, PUTs, deletes, heartbeats, drains, the keyed calls above,
+and any request answered 429. `Kosa8Cloud.builder().retry(RetryPolicy.NONE)` turns it off.
+
+**Org templates** (`cloud.orgTemplates()`): `build(name, new CloudOptions.TemplateBuild().image(ref))`
+(or `.dockerfile(text)`), `importImages(images, options)`, `list`, `get`, `waitReady`, `delete`; then
+create with `new CloudOptions.Create().template(name)`, a restore of about a second.
+
+**Capability tokens** (`cloud.tokens()`): `create(List.of("sandboxes:read", "sandboxes:write"),
+new CloudOptions.Token().sandboxIds(List.of(id)).ttlS(3600))` returns a `k8c_tok_` secret once;
+`list`, `revoke`. A token works as a `Kosa8Cloud` API key.
 
 ### Cloud errors
 

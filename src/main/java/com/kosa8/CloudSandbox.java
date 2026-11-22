@@ -298,7 +298,10 @@ public final class CloudSandbox {
     Map<String, Object> r = Kosa8Cloud.obj(cloud.request("POST", p("/exec"), b));
     Integer exit = r.get("exit") instanceof Number n ? n.intValue() : null;
     Long woke = r.get("woke_ms") instanceof Number n ? n.longValue() : null;
-    return new CloudExecResult(exit, str(r.get("stdout")), str(r.get("stderr")), woke);
+    FailureClass dflt = FailureClass.ofExit(exit);
+    String fc = r.get("failure_class") instanceof String f ? f : dflt.failureClass();
+    boolean rt = r.get("retryable") instanceof Boolean x ? x : dflt.retryable();
+    return new CloudExecResult(exit, str(r.get("stdout")), str(r.get("stderr")), woke, fc, rt);
   }
 
   private static String str(Object o) { return o instanceof String s ? s : ""; }
@@ -416,6 +419,40 @@ public final class CloudSandbox {
     }
     return out;
   }
+
+  /**
+   * Live copies of the sandbox as it is now, with fan-out options:
+   * {@code box.fork(new CloudOptions.Fork().n(250).runId("run-1").leaseS(600).prefix("roll"))}. Up to 1000
+   * in one call (kosa8 Cloud makes them 100 at a time on this sandbox's host). With partialOk (the server's
+   * default when n is over 100 or any fan-out field is set) the copies made come back and the rest are listed in
+   * {@link SandboxBatch#failed()}; partialOk(false) is all or nothing. Nothing made is an exception. The call
+   * carries an Idempotency-Key its retries reuse, so a retried fork makes no extra copies.
+   */
+  public SandboxBatch fork(CloudOptions.Fork options) {
+    CloudOptions.Fork o = options == null ? new CloudOptions.Fork() : options;
+    return SandboxBatch.of(cloud, Kosa8Cloud.obj(cloud.request("POST", p("/fork"), o.body(), o.idempotencyKey)), o.n);
+  }
+
+  /** Grade with no hidden files. See {@link #grade(List, CloudOptions.Grade)}. */
+  public GradeResult grade(List<String> cmd) { return grade(cmd, null); }
+
+  /**
+   * Grade this sandbox's state with hidden tests, in a sealed fork: kosa8 Cloud forks one copy, takes all
+   * network away from it, writes the options' files there (this sandbox never sees them), runs cmd, reads the
+   * reward and deletes the copy (unless keep). With runId it is recorded as a rollout of that RL run. The call
+   * carries an Idempotency-Key (the options' or a new UUID) its retries reuse: a retry gets the first grade's
+   * answer and records nothing twice.
+   */
+  public GradeResult grade(List<String> cmd, CloudOptions.Grade options) {
+    CloudOptions.Grade o = options == null ? new CloudOptions.Grade() : options;
+    return GradeResult.of(Kosa8Cloud.obj(cloud.request("POST", p("/grade"), o.body(cmd), o.idempotencyKey)));
+  }
+
+  /** Push back this sandbox's lease (by its own lease_s); returns whether it moved. */
+  public boolean heartbeat() { return cloud.sandboxes().heartbeat(CloudOptions.Selector.ids(List.of(id())), null) > 0; }
+
+  /** Its lease in seconds, or null when it is not leased. */
+  public Integer leaseS() { return info.get("lease_s") instanceof Number n ? n.intValue() : null; }
 
   /**
    * TCP ports listening in its running containers.

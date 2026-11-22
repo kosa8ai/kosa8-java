@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.0 — unreleased
+
+RL training and fan-out on kosa8 Cloud, matching the Python SDK's `kosa8.rl`.
+
+- **Fan-out**: `sandboxes().createMany(count, CloudOptions.Batch)` (up to 1000: `labels`, `runId`,
+  `leaseS`, `prefix`, `partialOk`) and `fork(CloudOptions.Fork)` (n up to 1000, same options), both
+  returning `SandboxBatch` (`sandboxes`, `failed` as `FanoutFailure`, `requested`, `created`, `runId`).
+  `fork(int)` is unchanged. `CloudOptions.Create.leaseS`, `heartbeat(Selector, extendS)`,
+  `CloudSandbox.heartbeat()`, `drain(Selector)` (follows `more`), `CloudSandbox.leaseS()`.
+- **Sealed grader**: `CloudSandbox.grade(cmd, CloudOptions.Grade)` and `sandboxes().grade(id, ...)`
+  return `GradeResult` (reward, metrics, exit code, failure class, grader id, recorded).
+- **Idempotency-Key** on create, batch, fork and grade (the caller's or a new UUID), reused on every retry.
+- **Failure classes**: `Kosa8Exception.failureClass()`, `retryable()`, `retryAfterSeconds()`,
+  `Kosa8Exception.classifyFailure(Throwable)`, `FailureClass`; `CloudExecResult` gains
+  `failureClass` and `retryable` (the 4-argument constructor still works).
+- **Retries**: `RetryPolicy` (exponential backoff, full jitter, Retry-After) applied by default
+  (3 tries) where safe; `Kosa8Cloud.builder().retry(RetryPolicy.NONE)` turns it off.
+- **`cloud.forkMap(base, items, fn, CloudOptions.ForkMap)`**: bounded concurrency, retries on a
+  fresh fork, per-item timeout, every child deleted.
+- **`Run`**: RL runs (create or attach, buffered rollouts sent 500 at a time, background lease
+  heartbeats, finish with drain, summary, rollouts, export, list) and `Run.map` with sealed grading,
+  groups and masking (`Rollouts`, `RolloutResult`).
+- **Org templates** (`cloud.orgTemplates()`) and **capability tokens** (`cloud.tokens()`); a
+  `k8c_tok_` token is accepted as the API key.
+
+## 0.4.0 — 2026-11-15
+
 The rest of the kosa8 Cloud API:
 
 - **Sized and Docker creates**: `CloudOptions.Create` `size`, `cpus(cpus, memMb)`, `image`,
@@ -16,8 +43,6 @@ The rest of the kosa8 Cloud API:
   `artifacts`, `downloadArtifact`, `createHook`, `hooks`, `deleteHook`.
 - Fix: `CloudFileInfo.mode` is an `Integer` (permission bits); the API sends a number, so it was
   always null.
-
-## 0.4.0 — 2026-11-15
 
 kosa8 Cloud parity with the Python, TypeScript and Go SDKs. The default Cloud address stays
 `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).

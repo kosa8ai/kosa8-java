@@ -35,21 +35,29 @@ import java.util.function.Function;
 public final class Kosa8Cloud {
   public static final String DEFAULT_CLOUD_URL = "https://api.kosa8.com";
   public static final String KEY_PREFIX = "k8c_live_";
+  /** A capability token from {@code cloud.tokens().create(...)} also works as the key. */
+  public static final String TOKEN_PREFIX = "k8c_tok_";
 
   private final String key;
   private final String baseUrl;
   private final Duration timeout;
   private final HttpClient http;
+  private final RetryPolicy retry;
+  private final java.util.function.Consumer<Duration> sleeper;
   private final Sandboxes sandboxes = new Sandboxes();
   private final Functions functions = new Functions();
   private final Snapshots snapshots = new Snapshots();
   private final Secrets secrets = new Secrets();
   private final Pipelines pipelines = new Pipelines();
+  private final OrgTemplates orgTemplates = new OrgTemplates();
+  private final Tokens tokens = new Tokens();
 
-  private Kosa8Cloud(String key, String baseUrl, Duration timeout) {
+  private Kosa8Cloud(String key, String baseUrl, Duration timeout, RetryPolicy retry, java.util.function.Consumer<Duration> sleeper) {
     this.key = key;
     this.baseUrl = baseUrl;
     this.timeout = timeout;
+    this.retry = retry;
+    this.sleeper = sleeper;
     // Plain http is loopback only (a local control plane): skip the h2c upgrade dance there.
     HttpClient.Builder hb = HttpClient.newBuilder().connectTimeout(timeout);
     if (baseUrl.startsWith("http:")) hb.version(HttpClient.Version.HTTP_1_1);
@@ -64,6 +72,8 @@ public final class Kosa8Cloud {
     private String baseUrl;
     private Duration timeout = Duration.ofSeconds(120);
     private Function<String, String> getenv = System::getenv;
+    private RetryPolicy retry = RetryPolicy.DEFAULT;
+    private java.util.function.Consumer<Duration> sleeper = CloudSandbox::pause;
 
     /** Default $KOSA8_API_KEY. */
     public Builder apiKey(String v) { apiKey = v; return this; }
@@ -73,17 +83,28 @@ public final class Kosa8Cloud {
     public Builder timeout(Duration v) { timeout = v; return this; }
     /** For tests. */
     public Builder getenv(Function<String, String> v) { getenv = v; return this; }
+    /**
+     * Retries for every request where trying again is safe (default {@link RetryPolicy#DEFAULT}, 3 tries with
+     * backoff and jitter): reads, PUTs, deletes, heartbeats and drains on infra failures; the calls that make
+     * sandboxes (create, batch, fork, grade), which carry an Idempotency-Key reused on every retry; and any
+     * request answered 429, waiting at least its Retry-After. {@link RetryPolicy#NONE} turns it off.
+     */
+    public Builder retry(RetryPolicy v) { retry = v == null ? RetryPolicy.NONE : v; return this; }
+    /** How retries wait (default Thread.sleep); for tests. */
+    public Builder sleeper(java.util.function.Consumer<Duration> v) { sleeper = v; return this; }
 
     public Kosa8Cloud build() {
       String k = apiKey != null ? apiKey : getenv.apply("KOSA8_API_KEY");
       k = k == null ? "" : k.strip();
       if (k.isEmpty()) throw new Kosa8Exception("no kosa8 Cloud API key: pass apiKey or set KOSA8_API_KEY");
-      if (!k.startsWith(KEY_PREFIX)) throw new Kosa8Exception("a kosa8 Cloud API key starts with " + KEY_PREFIX);
+      if (!k.startsWith(KEY_PREFIX) && !k.startsWith(TOKEN_PREFIX)) {
+        throw new Kosa8Exception("a kosa8 Cloud API key starts with " + KEY_PREFIX + " (or a capability token with " + TOKEN_PREFIX + ")");
+      }
       String u = baseUrl;
       if (u == null || u.isEmpty()) u = getenv.apply("KOSA8_CLOUD_URL");
       if (u == null || u.isEmpty()) u = DEFAULT_CLOUD_URL;
       if (timeout == null || timeout.isNegative() || timeout.isZero()) throw new Kosa8Exception("timeout must be positive");
-      return new Kosa8Cloud(k, checkBase(u), timeout);
+      return new Kosa8Cloud(k, checkBase(u), timeout, retry, sleeper);
     }
   }
 
@@ -121,6 +142,35 @@ public final class Kosa8Cloud {
   /** kosa8 Pipelines: CI runs and hooks. */
   public Pipelines pipelines() { return pipelines; }
 
+  /** The org's own templates, built once and kept as snapshots new sandboxes restore from. */
+  public OrgTemplates orgTemplates() { return orgTemplates; }
+
+  /** Short-lived capability tokens to hand a sandbox to someone without the API key. */
+  public Tokens tokens() { return tokens; }
+
+  /** The retry policy in use. */
+  public RetryPolicy retryPolicy() { return retry; }
+
+  java.util.function.Consumer<Duration> sleeper() { return sleeper; }
+
+  /**
+   * {@code fn(child, item)} for every item, each in its own fork of base, at most {@code concurrency} at once;
+   * results in item order. See {@link CloudOptions.ForkMap}.
+   */
+  public <T, R> List<ForkResult<T, R>> forkMap(CloudSandbox base, List<T> items, ForkMap.Fn<T, R> fn) {
+    return forkMap(base, items, fn, null);
+  }
+
+  /**
+   * {@code fn(child, item)} for every item, each in a fresh fork of base, at most concurrency at once; results
+   * in item order. A retryable failure (infra, a rate limit) is tried again on a new fork with backoff, up to
+   * retries times; what still fails is reported in its {@link ForkResult}, never thrown. Every child is deleted
+   * when its item is done, and any left (an exception, an interrupt) when the map ends.
+   */
+  public <T, R> List<ForkResult<T, R>> forkMap(CloudSandbox base, List<T> items, ForkMap.Fn<T, R> fn, CloudOptions.ForkMap options) {
+    return ForkMap.run(this, base, items, fn, options == null ? new CloudOptions.ForkMap() : options);
+  }
+
   /** What the org and its hosts can do, for feature detection. */
   public Map<String, Object> capabilities() { return obj(request("GET", "/v1/capabilities", null)); }
 
@@ -147,23 +197,60 @@ public final class Kosa8Cloud {
       + " s; run long work in the background, writing to /workspace, and poll it";
 
   Object request(String method, String path, Object body) {
-    return send(method, path, body, null, false);
+    return request(method, path, body, null);
+  }
+
+  /** A request; a call that makes sandboxes carries idemKey (a new UUID when null), the same on every retry. */
+  Object request(String method, String path, Object body, String idemKey) {
+    return send(method, path, body, null, false, idemKey);
   }
 
   /** The answer's raw bytes (a file download). */
   byte[] requestBytes(String method, String path) {
-    return (byte[]) send(method, path, null, null, true);
+    return (byte[]) send(method, path, null, null, true, null);
   }
 
   /** Sends raw bytes as application/octet-stream (a file upload); the answer is JSON. */
   Object requestUpload(String method, String path, byte[] data) {
-    return send(method, path, null, data, false);
+    return send(method, path, null, data, false, null);
   }
 
-  private Object send(String method, String path, Object body, byte[] raw, boolean rawAnswer) {
+  private static final java.util.regex.Pattern KEYED = java.util.regex.Pattern.compile("^/v1/sandboxes(/batch|/[A-Za-z0-9_]{1,64}/(fork|grade))?$");
+  private static final java.util.regex.Pattern KEY_RE = java.util.regex.Pattern.compile("^[\\x21-\\x7e]{1,255}$");
+  private static final java.util.Set<String> SAFE = java.util.Set.of("GET", "HEAD", "PUT", "DELETE");
+
+  /** Whether kosa8 Cloud keeps an Idempotency-Key for this call (24 hours). */
+  static boolean keyedRoute(String method, String path) {
+    int q = path.indexOf('?');
+    return "POST".equals(method) && KEYED.matcher(q < 0 ? path : path.substring(0, q)).matches();
+  }
+
+  static String checkIdempotencyKey(String k) {
+    if (k != null && !KEY_RE.matcher(k).matches()) throw new IllegalArgumentException("an idempotency key is 1-255 printable ASCII characters, e.g. a UUID");
+    return k;
+  }
+
+  private Object send(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey) {
+    checkIdempotencyKey(idemKey);
+    String idem = idemKey != null ? idemKey : keyedRoute(method, path) ? java.util.UUID.randomUUID().toString() : null;
+    int q = path.indexOf('?');
+    String bare = q < 0 ? path : path.substring(0, q);
+    boolean safe = idem != null || SAFE.contains(method) || bare.equals("/v1/sandboxes/heartbeat") || bare.equals("/v1/sandboxes/drain");
+    for (int attempt = 1; ; attempt++) {
+      try {
+        return sendOnce(method, path, body, raw, rawAnswer, idem);
+      } catch (Kosa8Exception e) {
+        if (!retry.shouldRetry(e, attempt) || !(safe || e.status() == 429)) throw e;
+        sleeper.accept(retry.delay(e, attempt));
+      }
+    }
+  }
+
+  private Object sendOnce(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey) {
     HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(timeout)
         .header("Authorization", "Bearer " + key).header("User-Agent", "kosa8-java/" + Kosa8Client.VERSION)
         .header("Accept", rawAnswer ? "application/octet-stream" : "application/json");
+    if (idemKey != null) rb.header("Idempotency-Key", idemKey);
     if (raw != null) {
       rb.header("Content-Type", "application/octet-stream");
       rb.method(method, HttpRequest.BodyPublishers.ofByteArray(raw));
@@ -236,7 +323,10 @@ public final class Kosa8Cloud {
           null, method, path, body).withCode(code != null ? code : "exec_timeout");
     }
     Kosa8Exception e = Kosa8Exception.fromResponse(status, msgBody, body, method, path).withCode(code);
-    if (e instanceof Kosa8Exception.RateLimitException rl) rl.withRetryAfter(parseRetryAfter(retryAfter));
+    Duration ra = parseRetryAfter(retryAfter);
+    if (e instanceof Kosa8Exception.RateLimitException rl) rl.withRetryAfter(ra);
+    if (ra != null) e.withRetryAfterSeconds(ra.toMillis() / 1000.0);
+    else if (body instanceof Map<?, ?> m && m.get("retry_after_s") instanceof Number n && n.doubleValue() > 0) e.withRetryAfterSeconds(n.doubleValue());
     return e;
   }
 
@@ -302,7 +392,7 @@ public final class Kosa8Cloud {
      */
     public CloudSandbox create(CloudOptions.Create options) {
       CloudOptions.Create o = options == null ? new CloudOptions.Create() : options;
-      CloudSandbox box = new CloudSandbox(Kosa8Cloud.this, obj(obj(request("POST", "/v1/sandboxes", o.body())).get("sandbox")));
+      CloudSandbox box = new CloudSandbox(Kosa8Cloud.this, obj(obj(request("POST", "/v1/sandboxes", o.body(), o.idempotencyKey)).get("sandbox")));
       if (!o.noWait && "creating".equals(box.state())) box.waitRunning();
       return box;
     }
@@ -354,6 +444,141 @@ public final class Kosa8Cloud {
 
     public CloudSandbox get(String id) {
       return new CloudSandbox(Kosa8Cloud.this, obj(obj(request("GET", "/v1/sandboxes/" + Transport.enc(id), null)).get("sandbox")));
+    }
+
+    /** count sandboxes with the org's defaults. See {@link #createMany(int, CloudOptions.Batch)}. */
+    public SandboxBatch createMany(int count) { return createMany(count, null); }
+
+    /**
+     * Up to 1000 sandboxes in one call, paced by kosa8 Cloud (16 at a time), each held to the rules of a create.
+     * Past the plan's running limit it makes what fits and lists the rest in {@link SandboxBatch#failed()}
+     * (partialOk, the default); {@code partialOk(false)} is all or nothing. Nothing made is an exception. The
+     * call carries an Idempotency-Key its retries reuse, so a retry after a timeout or a 5xx makes no second batch.
+     */
+    public SandboxBatch createMany(int count, CloudOptions.Batch options) {
+      CloudOptions.Batch o = options == null ? new CloudOptions.Batch() : options;
+      return SandboxBatch.of(Kosa8Cloud.this, obj(request("POST", "/v1/sandboxes/batch", o.body(count), o.idempotencyKey)), count);
+    }
+
+    /**
+     * Push back the leases of the selected sandboxes to now + extendS (null: each one's own lease_s); returns
+     * how many moved. A lapsed lease is not brought back. Send it every lease / 3 or so.
+     */
+    public int heartbeat(CloudOptions.Selector selector, Integer extendS) {
+      if (selector == null) throw new IllegalArgumentException("give a selector: which sandboxes");
+      Map<String, Object> b = selector.body();
+      if (extendS != null) b.put("extend_s", CloudOptions.checkLease(extendS, "extendS"));
+      return obj(request("POST", "/v1/sandboxes/heartbeat", b)).get("extended") instanceof Number n ? n.intValue() : 0;
+    }
+
+    /** {@code heartbeat(Selector.run(runId), null)}. */
+    public int heartbeat(String runId) { return heartbeat(CloudOptions.Selector.run(runId), null); }
+
+    /**
+     * Delete every selected sandbox of the org. kosa8 Cloud deletes up to 1000 a call; this calls again while
+     * it says there are more (and stops when a call deleted none), at most 100 calls.
+     */
+    public DrainResult drain(CloudOptions.Selector selector) {
+      if (selector == null) throw new IllegalArgumentException("give a selector: which sandboxes");
+      Map<String, Object> b = selector.body();
+      int deleted = 0;
+      List<String> ids = new ArrayList<>();
+      List<FanoutFailure> failed = new ArrayList<>();
+      for (int round = 0; round < 100; round++) {
+        Map<String, Object> r = obj(request("POST", "/v1/sandboxes/drain", b));
+        int n = r.get("deleted") instanceof Number x ? x.intValue() : 0;
+        deleted += n;
+        if (r.get("ids") instanceof List<?> l) for (Object o : l) ids.add(String.valueOf(o));
+        for (Map<String, Object> m : objs(r.get("failed"))) failed.add(FanoutFailure.of(m));
+        if (!Boolean.TRUE.equals(r.get("more")) || n == 0) break;
+      }
+      return new DrainResult(deleted, List.copyOf(ids), List.copyOf(failed));
+    }
+
+    /** {@code drain(Selector.run(runId))}. */
+    public DrainResult drain(String runId) { return drain(CloudOptions.Selector.run(runId)); }
+
+    /** Grade a solved sandbox by id in a sealed fork. See {@link CloudSandbox#grade(List, CloudOptions.Grade)}. */
+    public GradeResult grade(String sandboxId, List<String> cmd, CloudOptions.Grade options) {
+      return new CloudSandbox(Kosa8Cloud.this, new LinkedHashMap<>(Map.of("id", sandboxId))).grade(cmd, options);
+    }
+  }
+
+  /**
+   * {@code cloud.orgTemplates()}: the org's own templates, built on a kosa8 Cloud host and kept as a snapshot,
+   * so a sandbox created from one ({@code new CloudOptions.Create().template(name)}) is a restore of about a
+   * second instead of a cold image pull.
+   */
+  public final class OrgTemplates {
+    private OrgTemplates() {}
+
+    private String p(String ref) { return "/v1/templates/" + Transport.enc(ref); }
+
+    /** Queue a build (202): poll {@link #get} or {@link #waitReady} until its state is ready. */
+    public Map<String, Object> build(String name, CloudOptions.TemplateBuild options) {
+      if (options == null) throw new IllegalArgumentException("give an image or a dockerfile");
+      return obj(obj(request("POST", "/v1/templates", options.body(name))).get("template"));
+    }
+
+    /**
+     * Queue many image templates at once (each {@code {name, image}}, at most 1000), such as RL task images by
+     * digest: {import_id, requested, queued, templates, failed}.
+     */
+    public Map<String, Object> importImages(List<Map<String, String>> images, CloudOptions.TemplateImport options) {
+      CloudOptions.TemplateImport o = options == null ? new CloudOptions.TemplateImport() : options;
+      return obj(request("POST", "/v1/templates/import", o.body(images)));
+    }
+
+    /** The org's own templates (the org_templates of GET /v1/templates). */
+    public List<Map<String, Object>> list() { return objs(obj(request("GET", "/v1/templates", null)).get("org_templates")); }
+
+    /** One template by id (tpl_...) or name, with its build log. */
+    public Map<String, Object> get(String idOrName) { return obj(obj(request("GET", p(idOrName), null)).get("template")); }
+
+    /** Delete it: a build in flight stops and its snapshot is deleted; sandboxes made from it are not touched. */
+    public void delete(String idOrName) { request("DELETE", p(idOrName), null); }
+
+    /** Poll every interval until it is ready; throws Kosa8Exception if it failed, TimeoutException after timeout. */
+    public Map<String, Object> waitReady(String idOrName, Duration timeout, Duration interval) {
+      long deadline = System.nanoTime() + timeout.toNanos();
+      while (true) {
+        Map<String, Object> t = get(idOrName);
+        String st = String.valueOf(t.get("state"));
+        if ("ready".equals(st)) return t;
+        if ("failed".equals(st) || "error".equals(st)) {
+          throw new Kosa8Exception("template " + idOrName + " " + st + (t.get("last_error") != null ? ": " + t.get("last_error") : ""));
+        }
+        if (System.nanoTime() > deadline) {
+          throw new Kosa8Exception.TimeoutException("template " + idOrName + " was still " + st + " after " + timeout.toSeconds() + " s", "GET", p(idOrName));
+        }
+        sleeper.accept(interval);
+      }
+    }
+  }
+
+  /**
+   * {@code cloud.tokens()}: short-lived bearer tokens (at most 24 hours) limited to some scopes and, optionally,
+   * some sandboxes, for handing a sandbox to an end user without the API key. A token works as the
+   * {@code apiKey} of a Kosa8Cloud.
+   */
+  public final class Tokens {
+    private Tokens() {}
+
+    /** A token with these scopes (from {@link CloudOptions#TOKEN_SCOPES}); its "secret" is in the answer only now. */
+    public Map<String, Object> create(List<String> scopes, CloudOptions.Token options) {
+      CloudOptions.Token o = options == null ? new CloudOptions.Token() : options;
+      return obj(obj(request("POST", "/v1/tokens", o.body(scopes))).get("token"));
+    }
+
+    /** The org's tokens (never secrets); with all, the last day's revoked and expired ones too. */
+    public List<Map<String, Object>> list(boolean all) { return objs(obj(request("GET", "/v1/tokens" + (all ? "?all=1" : ""), null)).get("tokens")); }
+
+    public List<Map<String, Object>> list() { return list(false); }
+
+    /** Revoke it; it stops at once. */
+    public Map<String, Object> revoke(String id) {
+      if (id == null || id.isEmpty()) throw new IllegalArgumentException("revoke needs a token id");
+      return obj(obj(request("DELETE", "/v1/tokens/" + Transport.enc(id), null)).get("token"));
     }
   }
 
