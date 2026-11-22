@@ -282,7 +282,7 @@ public final class CloudTest extends ClientTest {
     eq("https://api.kosa8.com", Kosa8Cloud.DEFAULT_CLOUD_URL, "constant");
     Kosa8Cloud c = Kosa8Cloud.builder().apiKey(KEY).getenv(x -> null).build();
     eq("https://api.kosa8.com", c.baseUrl(), "default with no env");
-    eq("0.5.1", Kosa8Client.VERSION, "version");
+    eq("0.5.2", Kosa8Client.VERSION, "version");
   }
 
   public void testCloudCreateOptions() throws Exception {
@@ -296,7 +296,7 @@ public final class CloudTest extends ClientTest {
       cloud.sandboxes().create(new CloudOptions.Create());
       eq(Map.of(), stub.seen.get(2).body(), "nothing set: empty object");
       check("{}".equals(new String(stub.seen.get(2).raw(), StandardCharsets.UTF_8)), "sends {}");
-      eq("kosa8-java/0.5.1", stub.seen.get(0).headers().get("user-agent"), "user agent");
+      eq("kosa8-java/0.5.2", stub.seen.get(0).headers().get("user-agent"), "user agent");
       int before = stub.seen.size();
       raises(IllegalArgumentException.class, () -> cloud.sandboxes().create(new CloudOptions.Create().ttlSeconds(59)));
       raises(IllegalArgumentException.class, () -> cloud.sandboxes().create(new CloudOptions.Create().ttlSeconds(7_776_001)));

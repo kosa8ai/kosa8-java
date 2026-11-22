@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2 — unreleased
+## 0.5.2
 
 - **Actionable errors.** A kosa8 Cloud error's `getMessage()` is the server's sentence followed by what to act on,
   e.g. `no host has room right now [HTTP 503 no_capacity; retry in 10 s; request a5e77ddee9ef8120-BOS]`; a 402 adds
