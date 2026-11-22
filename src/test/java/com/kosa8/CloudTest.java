@@ -130,6 +130,25 @@ public final class CloudTest extends ClientTest {
     }
   }
 
+  public void testCloudExecTimeoutS() throws Exception {
+    try (Stub stub = new Stub(s -> {
+      if (s.body() instanceof Map<?, ?> b && Long.valueOf(2).equals(b.get("timeout_s"))) {
+        return new Answer(504, Map.of("error", "exec_timeout", "message", "the command ran longer than its timeout_s of 2 s and was stopped"));
+      }
+      return new Answer(200, Map.of("exit", 0, "stdout", "", "stderr", ""));
+    })) {
+      Kosa8Cloud cloud = stub.cloud();
+      CloudSandbox box = new CloudSandbox(cloud, Map.of("id", "sbx_1", "state", "running"));
+      box.exec("true", null, null, 30);
+      eq(Map.of("cmd", List.of("sh", "-c", "true"), "timeout_s", 30L), stub.seen.get(0).body(), "timeout body");
+      Kosa8Exception.ExecTimeoutException e = raises(Kosa8Exception.ExecTimeoutException.class, () -> box.exec("sleep 9", null, null, 2));
+      check(!e.getMessage().contains("background"), e.getMessage());
+      int n = stub.seen.size();
+      for (int bad : new int[] {0, 91}) raises(IllegalArgumentException.class, () -> box.exec("true", null, null, bad));
+      eq(n, stub.seen.size(), "a bad timeoutS is not sent");
+    }
+  }
+
   public void testCloudFunctions() throws Exception {
     try (Stub stub = new Stub(s -> {
       if (s.path().endsWith("/invoke")) return new Answer(200, Map.of("invocation", Map.of("id", "inv_1"), "ok", true,
