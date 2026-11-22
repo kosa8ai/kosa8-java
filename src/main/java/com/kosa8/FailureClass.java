@@ -12,7 +12,7 @@ import java.util.Set;
  */
 public record FailureClass(String failureClass, boolean retryable) {
   /** The classes kosa8 Cloud sends. */
-  public static final java.util.List<String> CLASSES = java.util.List.of("ok", "exit_nonzero", "timeout", "infra", "quota", "client");
+  public static final java.util.List<String> CLASSES = java.util.List.of("ok", "exit_nonzero", "timeout", "oom", "infra", "quota", "client");
 
   private static final Set<String> INFRA = Set.of("host_failed", "not_ready", "no_capacity", "host_unreachable", "host_unavailable",
       "host_busy", "host_restarting", "wake_failed", "try_again", "internal", "kernel_failed", "egress_failed", "dns_unreachable",

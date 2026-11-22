@@ -116,7 +116,7 @@ public final class Run implements AutoCloseable {
     public MapOptions timeout(Duration v) { timeout = v; return this; }
     /** The failure classes masked (reward null; default infra, quota, error). Add timeout for compact filtering. */
     public MapOptions mask(Set<String> v) {
-      Set<String> known = Set.of("ok", "exit_nonzero", "timeout", "infra", "quota", "client", "error");
+      Set<String> known = Set.of("ok", "exit_nonzero", "timeout", "oom", "infra", "quota", "client", "error");
       if (!known.containsAll(v)) throw new IllegalArgumentException("unknown failure classes in mask: " + v);
       mask = Set.copyOf(v);
       return this;
