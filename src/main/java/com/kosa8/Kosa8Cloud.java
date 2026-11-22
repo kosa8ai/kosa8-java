@@ -365,7 +365,9 @@ public final class Kosa8Cloud {
         || (status == 502 && isExecPath(path) && message.toLowerCase(java.util.Locale.ROOT).contains("timed out"));
     if (execTimeout) {
       String base = message.isEmpty() ? "request failed with HTTP " + status : message;
-      return new Kosa8Exception.ExecTimeoutException(base + " (" + EXEC_HINT + ")", status, message.isEmpty() ? null : message,
+      // Its own timeoutS (exec(..., timeoutS)) needs no hint about the 90 s limit.
+      String hint = message.contains("timeout_s") ? "" : " (" + EXEC_HINT + ")";
+      return new Kosa8Exception.ExecTimeoutException(base + hint, status, message.isEmpty() ? null : message,
           null, method, path, body).withCode(code != null ? code : "exec_timeout");
     }
     Kosa8Exception e = Kosa8Exception.fromResponse(status, msgBody, body, method, path).withCode(code);

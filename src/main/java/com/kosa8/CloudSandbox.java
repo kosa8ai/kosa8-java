@@ -266,30 +266,46 @@ public final class CloudSandbox {
 
   Kosa8Cloud cloud() { return cloud; }
 
-  /** Run a command through {@code sh -c} and wait for it. See {@link #exec(List, String, Map)}. */
-  public CloudExecResult exec(String cmd) { return exec(List.of("sh", "-c", cmd), null, null); }
+  /** Run a command through {@code sh -c} and wait for it. See {@link #exec(List, String, Map, Integer)}. */
+  public CloudExecResult exec(String cmd) { return exec(List.of("sh", "-c", cmd), null, null, null); }
 
-  /** Run a command and wait for it. See {@link #exec(List, String, Map)}. */
-  public CloudExecResult exec(List<String> cmd) { return exec(cmd, null, null); }
+  /** Run a command and wait for it. See {@link #exec(List, String, Map, Integer)}. */
+  public CloudExecResult exec(List<String> cmd) { return exec(cmd, null, null, null); }
 
   public CloudExecResult exec(String cmd, String image, Map<String, String> env) {
-    return exec(List.of("sh", "-c", cmd), image, env);
+    return exec(List.of("sh", "-c", cmd), image, env, null);
+  }
+
+  /** Run a command through {@code sh -c}. See {@link #exec(List, String, Map, Integer)}. */
+  public CloudExecResult exec(String cmd, String image, Map<String, String> env, Integer timeoutS) {
+    return exec(List.of("sh", "-c", cmd), image, env, timeoutS);
+  }
+
+  /** Run a command in image with env added, and wait for it. See {@link #exec(List, String, Map, Integer)}. */
+  public CloudExecResult exec(List<String> cmd, String image, Map<String, String> env) {
+    return exec(cmd, image, env, null);
   }
 
   /**
    * Run a command in image (null: the template's own) with env added, and wait for it. A sleeping
    * sandbox wakes for it.
    *
-   * <p>Each exec runs in a fresh container: only {@code /workspace} persists, so {@code cd},
-   * {@code export} and packages installed elsewhere are gone by the next one. kosa8 Cloud stops a
-   * buffered exec after 90 s, thrown as {@link Kosa8Exception.ExecTimeoutException}; run
-   * long work in the background ({@code nohup sh -c '...' > /workspace/job.log 2>&1 &}) and poll it.
-   * The request (command and env) is at most 64 KiB (413 {@code too_large}).
+   * <p>Only {@code /workspace} is sure to persist: an exec may run in a fresh container (unless the
+   * sandbox is persistent), so {@code cd}, {@code export} and packages installed elsewhere may be
+   * gone by the next one. kosa8 Cloud stops a buffered exec after 90 s, thrown as
+   * {@link Kosa8Exception.ExecTimeoutException}; run long work in the background
+   * ({@code nohup sh -c '...' > /workspace/job.log 2>&1 &}) and poll it. {@code timeoutS} (1 to 90,
+   * null for none) stops the command in the sandbox sooner, thrown the same way. The request
+   * (command and env) is at most 64 KiB (413 {@code too_large}).
    */
-  public CloudExecResult exec(List<String> cmd, String image, Map<String, String> env) {
+  public CloudExecResult exec(List<String> cmd, String image, Map<String, String> env, Integer timeoutS) {
+    if (timeoutS != null && (timeoutS < 1 || timeoutS > Kosa8Cloud.EXEC_LIMIT_S)) {
+      throw new IllegalArgumentException("timeoutS must be 1 to " + Kosa8Cloud.EXEC_LIMIT_S + " seconds, not " + timeoutS);
+    }
     Map<String, Object> b = new LinkedHashMap<>();
     b.put("cmd", List.copyOf(cmd));
     if (image != null) b.put("image", image);
+    if (timeoutS != null) b.put("timeout_s", timeoutS);
     if (env != null && !env.isEmpty()) {
       List<String> kv = new ArrayList<>();
       env.forEach((k, v) -> kv.add(k + "=" + v));
