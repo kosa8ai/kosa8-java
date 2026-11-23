@@ -1,6 +1,8 @@
 # kosa8 (Java)
 
-The Java SDK for [kosa8](https://kosa8.com): microVM sandboxes for AI agents, on kosa8 Cloud or on
+**[kosa8](https://kosa8.com): Zero Trust cybersecurity infrastructure for AI agents.**
+
+The Java SDK for [kosa8](https://kosa8.com): each agent in its own microVM, on kosa8 Cloud or on
 your own machine's daemon. No dependencies; Java 17+. Method for method it matches
 [`@kosa8/sdk`](https://github.com/kosa8ai/kosa8-js), the Python `kosa8` package, `kosa8-go` and the Ruby gem.
 
