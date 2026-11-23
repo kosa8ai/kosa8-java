@@ -40,6 +40,7 @@ public final class CloudTest extends ClientTest {
         Seen s = new Seen(x.getRequestMethod(), x.getRequestURI().toString(), h, text.isEmpty() || !json ? null : Json.parse(text), raw);
         synchronized (seen) { seen.add(s); }
         Answer a = fn.apply(s);
+        if (a == null) throw new IOException("dropped: no answer"); // the client sees the connection close
         byte[] out = a.body() == null ? new byte[0]
             : a.body() instanceof byte[] bs ? bs : Json.write(a.body()).getBytes(StandardCharsets.UTF_8);
         x.getResponseHeaders().set("Content-Type", a.body() instanceof byte[] ? "application/octet-stream" : "application/json");

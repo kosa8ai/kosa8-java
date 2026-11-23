@@ -214,8 +214,10 @@ Also on `cloud`: `recordings()` (`list`, `link`, `delete`), `webhooks()` (`creat
 
 Every request retries with exponential backoff and full jitter (3 tries by default, `RetryPolicy`), waiting
 at least the server's `Retry-After` (the header, or `retry_after` / `retry_after_s` in the body). Reads,
-PUTs and deletes retry on infra failures; creates, forks, grades and job submits carry an Idempotency-Key
-reused on every retry. Any call, a plain POST included, retries on 429, on 503 `database_busy` and on 409
+PUTs and deletes retry on infra failures; creates, forks, grades and job submits carry an Idempotency-Key.
+The SDK's own key is reused after no answer (the first try may still be running and may have made the
+sandbox), a 429 and a 409 `idempotency_in_progress` / `template_building`; after a 5xx (502 `host_failed`,
+503 `no_capacity`, ...) the retry gets a new key, so it is a new attempt. A key you pass is never changed. Any call, a plain POST included, retries on 429, on 503 `database_busy` and on 409
 `template_building`, which the server sends before doing anything. An answer with `retryable: false` is not
 retried. `Kosa8Cloud.builder().retry(RetryPolicy.NONE)` turns it off.
 
@@ -241,7 +243,7 @@ git. Use `template("python")` (or another key from `cloud.templates()`) for Pyth
 
 Many sandboxes at once, leases so a crashed trainer leaks none, a drain, and a sealed grader. Every
 call that makes sandboxes (create, `createMany`, `fork`, `grade`) carries an `Idempotency-Key`
-(yours, or a new UUID) that its retries reuse, so a retry after a timeout or a 5xx makes nothing twice.
+(yours, or a new UUID) that its retries reuse after a timeout, so a retry makes nothing twice.
 
 ```java
 // Up to 1000 in one call, labelled kosa8.run=run-1, deleted 600 s after the last heartbeat.

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Retries of creates, batches, forks, grades, job submits and rollout flushes use a new SDK-made
+  `Idempotency-Key` after a 5xx (502 `host_failed`, 503 `no_capacity` / `host_restarting` /
+  `host_unavailable`, 504), so each retry of a server-side failure is a new attempt. The key is still kept
+  after no answer (the first try may have created the sandbox), a 429 and a 409 `idempotency_in_progress` /
+  `template_building`. A key you pass is never changed. Retry-After is honoured as before.
+
 ## 0.6.0 - 2026-11-22
 
 Java catches up with the Python and JS SDKs on the customer-facing kosa8 Cloud API.

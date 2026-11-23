@@ -119,7 +119,10 @@ public final class CloudOptions {
      * forward, so a crashed client leaks nothing. Not with ttlSeconds or deleteAfter.
      */
     public Create leaseS(int v) { leaseS = v; return this; }
-    /** The Idempotency-Key (default a new UUID), reused on every retry: a retried create makes one sandbox. */
+    /**
+     * The Idempotency-Key, sent unchanged on every retry. The default (a new UUID) is reused after no answer, a 429
+     * or a 409, so a retried create makes one sandbox, and renewed after a 5xx, so that retry is a new attempt.
+     */
     public Create idempotencyKey(String v) { idempotencyKey = Kosa8Cloud.checkIdempotencyKey(v); return this; }
     /** Return while a sized sandbox is still booting (state creating); call {@link CloudSandbox#waitRunning}. */
     public Create noWait() { noWait = true; return this; }
@@ -404,7 +407,7 @@ public final class CloudOptions {
     }
     /** true: make what fits and list the rest in failed; false: all or nothing. */
     public S partialOk(boolean v) { partialOk = v; return self(); }
-    /** The Idempotency-Key (default a new UUID), reused on every retry of this call. */
+    /** The Idempotency-Key (default a new UUID, renewed after a 5xx), sent unchanged on every retry when yours. */
     public S idempotencyKey(String v) { idempotencyKey = Kosa8Cloud.checkIdempotencyKey(v); return self(); }
 
     void put(Map<String, Object> b) {
@@ -548,7 +551,10 @@ public final class CloudOptions {
       rollout = r;
       return this;
     }
-    /** The Idempotency-Key (default a new UUID), reused on every retry: a retried grade records nothing twice. */
+    /**
+     * The Idempotency-Key (default a new UUID, renewed after a 5xx), reused after a timeout: a retried grade records
+     * nothing twice. Yours is sent unchanged on every retry.
+     */
     public Grade idempotencyKey(String v) { idempotencyKey = Kosa8Cloud.checkIdempotencyKey(v); return this; }
 
     Map<String, Object> body(java.util.List<String> cmd) {

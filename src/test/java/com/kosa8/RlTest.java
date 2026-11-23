@@ -118,7 +118,7 @@ public final class RlTest extends ClientTest {
     raises(IllegalArgumentException.class, () -> new RetryPolicy(0, Duration.ZERO, Duration.ZERO, Duration.ZERO));
   }
 
-  public void testKeyedCreateRetriesWithTheSameIdempotencyKey() throws Exception {
+  public void testKeyedCreateRetriesWithANewIdempotencyKeyAfterA5xx() throws Exception {
     List<Answer> answers = new ArrayList<>(List.of(
         new Answer(503, m("error", "host_failed", "message", "down")),
         new Answer(201, m("sandbox", box("sbx_1")))));
@@ -129,10 +129,69 @@ public final class RlTest extends ClientTest {
       eq(2, stub.seen.size(), "two tries");
       String k1 = stub.seen.get(0).headers().get("idempotency-key"), k2 = stub.seen.get(1).headers().get("idempotency-key");
       check(k1 != null && k1.length() == 36, "a UUID key: " + k1);
-      eq(k1, k2, "the same key on the retry");
+      check(k2 != null && k2.length() == 36 && !k1.equals(k2), "a new key after a 5xx: " + k1 + " " + k2);
       eq(600L, ((Map<?, ?>) stub.seen.get(0).body()).get("lease_s"), "lease_s sent");
       eq(1, sleeps.size(), "one wait");
     }
+  }
+
+  static List<String> keys(Stub stub) {
+    List<String> out = new ArrayList<>();
+    synchronized (stub.seen) { for (Seen s : stub.seen) out.add(s.headers().get("idempotency-key")); }
+    return out;
+  }
+
+  public void testA502RetryGetsANewKeyAndA503WaitsItsRetryAfter() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(502, m("error", "host_failed", "message", "boot failed", "failure_class", "infra", "retryable", true)),
+        new Answer(503, m("error", "host_restarting", "message", "restarting"), Map.of("Retry-After", "2")),
+        new Answer(201, m("sandbox", box("sbx_1")))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      List<Duration> sleeps = new ArrayList<>();
+      stub.cloud(sleeps).sandboxes().create(new CloudOptions.Create());
+      List<String> k = keys(stub);
+      eq(3, k.size(), "three tries");
+      eq(3, (int) k.stream().distinct().count(), "a new key on each retry after a 5xx: " + k);
+      check(sleeps.get(1).toMillis() >= 2000, "waited Retry-After: " + sleeps);
+    }
+  }
+
+  public void testNoAnswerKeepsTheKey() throws Exception {
+    List<Answer> answers = new ArrayList<>();
+    answers.add(null); // the connection drops: no answer
+    answers.add(new Answer(201, m("sandbox", box("sbx_1"))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      eq("sbx_1", stub.cloud(new ArrayList<>()).sandboxes().create(new CloudOptions.Create()).id(), "made");
+      List<String> k = keys(stub);
+      eq(2, k.size(), "two tries");
+      check(k.get(0) != null && k.get(0).equals(k.get(1)), "the same key after no answer: " + k);
+    }
+  }
+
+  public void testA429AndA409InProgressKeepTheKey() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(429, m("error", "rate_limited", "message", "slow"), Map.of("Retry-After", "1")),
+        new Answer(409, m("error", "idempotency_in_progress", "message", "wait", "retry_after_s", 1)),
+        new Answer(201, m("sandbox", box("sbx_1")))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      stub.cloud(new ArrayList<>()).sandboxes().create(new CloudOptions.Create());
+      List<String> k = keys(stub);
+      eq(3, k.size(), "three tries");
+      eq(1, (int) k.stream().distinct().count(), "one key: " + k);
+    }
+  }
+
+  public void testTheCallersKeyIsNeverChanged() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(502, m("error", "host_failed", "message", "boot failed")),
+        new Answer(201, m("sandbox", box("sbx_1")))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      stub.cloud(new ArrayList<>()).sandboxes().create(new CloudOptions.Create().idempotencyKey("caller-key"));
+      eq(List.of("caller-key", "caller-key"), keys(stub), "the caller's key on every try");
+    }
+    check(Kosa8Cloud.renewsIdempotencyKey(Kosa8Cloud.cloudError(504, m("error", "gateway_timeout"), "POST", "/v1/sandboxes")), "504");
+    check(!Kosa8Cloud.renewsIdempotencyKey(Kosa8Cloud.cloudError(429, m("error", "rate_limited"), "POST", "/v1/sandboxes")), "429");
+    check(!Kosa8Cloud.renewsIdempotencyKey(new Kosa8Exception.ConnectionException("x", "POST", "/v1/sandboxes", null)), "no answer");
   }
 
   public void testRetryScopeAnd429() throws Exception {

@@ -47,7 +47,7 @@ public final class CloudJobs {
   public Map<String, Object> submit(Map<String, ?> spec) { return submit(spec, null); }
 
   /**
-   * Start a job. The call carries an Idempotency-Key (idempotencyKey, or a new UUID) reused on every retry,
+   * Start a job. The call carries an Idempotency-Key (idempotencyKey, or a new UUID renewed after a 5xx),
    * so a retry after a dropped connection starts the job once.
    */
   public Map<String, Object> submit(Map<String, ?> spec, String idempotencyKey) {
