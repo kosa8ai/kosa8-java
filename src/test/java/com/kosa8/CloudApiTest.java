@@ -91,7 +91,9 @@ public final class CloudApiTest extends ClientTest {
       eq("job_1", job.get("id"), "id from job_id");
       eq("run_1", job.get("run_id"), "run_id");
       check(stub.seen.get(0).headers().get("idempotency-key") != null, "keyed");
-      eq(stub.seen.get(0).headers().get("idempotency-key"), stub.seen.get(1).headers().get("idempotency-key"), "same key on retry");
+      check(stub.seen.get(1).headers().get("idempotency-key") != null
+          && !stub.seen.get(0).headers().get("idempotency-key").equals(stub.seen.get(1).headers().get("idempotency-key")),
+          "a new key on the retry after a 502");
       raises(IllegalArgumentException.class, () -> stub.cloud().jobs().submit(m("name", "j", "template", "a", "image", "b",
           "solver", m(), "grader", m())));
     }

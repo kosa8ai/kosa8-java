@@ -463,7 +463,8 @@ public final class CloudSandbox {
    * in one call (kosa8 Cloud makes them 100 at a time on this sandbox's host). With partialOk (the server's
    * default when n is over 100 or any fan-out field is set) the copies made come back and the rest are listed in
    * {@link SandboxBatch#failed()}; partialOk(false) is all or nothing. Nothing made is an exception. The call
-   * carries an Idempotency-Key its retries reuse, so a retried fork makes no extra copies.
+   * carries an Idempotency-Key its retries reuse after a timeout (renewed after a 5xx, unless it is yours), so a
+   * retried fork makes no extra copies.
    */
   public SandboxBatch fork(CloudOptions.Fork options) {
     CloudOptions.Fork o = options == null ? new CloudOptions.Fork() : options;
@@ -477,7 +478,8 @@ public final class CloudSandbox {
    * Grade this sandbox's state with hidden tests, in a sealed fork: kosa8 Cloud forks one copy, takes all
    * network away from it, writes the options' files there (this sandbox never sees them), runs cmd, reads the
    * reward and deletes the copy (unless keep). With runId it is recorded as a rollout of that RL run. The call
-   * carries an Idempotency-Key (the options' or a new UUID) its retries reuse: a retry gets the first grade's
+   * carries an Idempotency-Key (the options' or a new UUID, renewed after a 5xx) its retries reuse after a
+   * timeout: a retry gets the first grade's
    * answer and records nothing twice.
    */
   public GradeResult grade(List<String> cmd, CloudOptions.Grade options) {

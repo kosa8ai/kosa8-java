@@ -98,7 +98,8 @@ public final class Kosa8Cloud {
      * Retries for every request where trying again is safe (default {@link RetryPolicy#DEFAULT}, 3 tries with
      * backoff and jitter): reads, PUTs, deletes, heartbeats and drains on infra failures; the calls that make
      * sandboxes (create, batch, fork, grade), a job submit and a rollout flush, which carry an Idempotency-Key
-     * reused on every retry; and any request answered 429, 503 database_busy or 409 template_building (refused
+     * (the SDK's own is reused after no answer, a 429 or a 409 and renewed after a 5xx; yours is never changed);
+     * and any request answered 429, 503 database_busy or 409 template_building (refused
      * before anything ran), waiting at least its Retry-After (header, or retry_after / retry_after_s in the body).
      * An answer whose body says retryable: false is not retried. {@link RetryPolicy#NONE} turns it off.
      */
@@ -385,9 +386,16 @@ public final class Kosa8Cloud {
     return k;
   }
 
+  /**
+   * One call, retried as the policy allows. A key the caller gave goes unchanged with every retry. The SDK's own
+   * key (on a {@link #keyedRoute keyed route}) is kept after no answer (the first try may still be running and may
+   * have made the sandbox), a 429 or a 409, and replaced after a 5xx ({@link #renewsIdempotencyKey}), so each retry
+   * of a server-side failure is a new attempt.
+   */
   private Object send(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey) {
     checkIdempotencyKey(idemKey);
-    String idem = idemKey != null ? idemKey : keyedRoute(method, path) ? java.util.UUID.randomUUID().toString() : null;
+    boolean ownKey = idemKey == null && keyedRoute(method, path);
+    String idem = ownKey ? java.util.UUID.randomUUID().toString() : idemKey;
     int q = path.indexOf('?');
     String bare = q < 0 ? path : path.substring(0, q);
     boolean safe = idem != null || SAFE.contains(method) || bare.equals("/v1/sandboxes/heartbeat") || bare.equals("/v1/sandboxes/drain");
@@ -397,8 +405,18 @@ public final class Kosa8Cloud {
       } catch (Kosa8Exception e) {
         if (!retry.shouldRetry(e, attempt) || !(safe || rejectedBeforeRunning(e))) throw e;
         sleeper.accept(retry.delay(e, attempt));
+        if (ownKey && renewsIdempotencyKey(e)) idem = java.util.UUID.randomUUID().toString();
       }
     }
+  }
+
+  /**
+   * Whether a retry after {@code e} gets a new SDK-made Idempotency-Key: only when kosa8 Cloud answered with a 5xx
+   * (502 host_failed, 503 no_capacity, ...). No answer (a timeout or a dropped connection), a 429 and a 409
+   * (idempotency_in_progress, template_building) keep the key.
+   */
+  static boolean renewsIdempotencyKey(Kosa8Exception e) {
+    return e.status() >= 500;
   }
 
   /**
@@ -664,7 +682,8 @@ public final class Kosa8Cloud {
      * Up to 1000 sandboxes in one call, paced by kosa8 Cloud (16 at a time), each held to the rules of a create.
      * Past the plan's running limit it makes what fits and lists the rest in {@link SandboxBatch#failed()}
      * (partialOk, the default); {@code partialOk(false)} is all or nothing. Nothing made is an exception. The
-     * call carries an Idempotency-Key its retries reuse, so a retry after a timeout or a 5xx makes no second batch.
+     * call carries an Idempotency-Key its retries reuse after a timeout (renewed after a 5xx, unless it is yours),
+     * so a retry makes no second batch.
      */
     public SandboxBatch createMany(int count, CloudOptions.Batch options) {
       CloudOptions.Batch o = options == null ? new CloudOptions.Batch() : options;
