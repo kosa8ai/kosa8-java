@@ -67,6 +67,7 @@ public final class CloudOptions {
     Integer leaseS;
     String idempotencyKey;
     boolean noWait;
+    Object repo;
 
     /**
      * vCPU x GiB: one of {@link CloudOptions#CREATE_SIZES}, e.g. "4x8", or a small size such as "0.25x0.5". A
@@ -132,6 +133,16 @@ public final class CloudOptions {
     public Create idempotencyKey(String v) { idempotencyKey = Kosa8Cloud.checkIdempotencyKey(v); return this; }
     /** Return while a sized sandbox is still booting (state creating); call {@link CloudSandbox#waitRunning}. */
     public Create noWait() { noWait = true; return this; }
+
+    /**
+     * Start from a GitHub repo of the org's connected GitHub: "owner/name" or "owner/name@ref" (a branch, tag
+     * or commit). It is cloned into /workspace/&lt;name&gt;; no GitHub token ever enters the sandbox.
+     * {@link CloudSandbox#repoInfo()} says whether the clone is done.
+     */
+    public Create repo(String v) { repo = repoBody(v); return this; }
+
+    /** Start from a repo with a ref, clone path or depth. */
+    public Create repo(RepoSpec v) { repo = v.body(); return this; }
 
     /** A key from {@code cloud.templates()} (default the org's, base), or a Store item creator/name[@version]. */
     public Create template(String v) { template = v; return this; }
@@ -199,6 +210,7 @@ public final class CloudOptions {
         b.put("secrets", java.util.List.copyOf(secrets));
       }
       if (egress != null) b.put("egress", egress);
+      if (repo != null) b.put("repo", repo);
       if (snapshot != null) {
         if (!SNAPSHOT_ID.matcher(snapshot).matches()) throw new IllegalArgumentException("snapshot is a snapshot id (snap_...), not " + snapshot);
         for (String k : java.util.List.of("template", "region", "size", "cpus", "image", "disk_gb", "persistent", "docker", "kvm", "cpu")) {
@@ -208,6 +220,111 @@ public final class CloudOptions {
         }
         b.put("snapshot", snapshot);
       }
+      return b;
+    }
+  }
+
+  /** owner/name, as GitHub allows them. */
+  static final Pattern REPO_NAME = Pattern.compile("[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}");
+
+  static String checkRepoName(String name) {
+    if (name == null || !REPO_NAME.matcher(name).matches()) {
+      throw new IllegalArgumentException("repo must be owner/name (optionally @ref), not " + name);
+    }
+    return name;
+  }
+
+  /** "owner/name" or "owner/name@ref", checked; sent as given. */
+  static String repoBody(String spec) {
+    if (spec == null) throw new IllegalArgumentException("repo must be owner/name (optionally @ref), not null");
+    int at = spec.indexOf('@');
+    checkRepoName(at < 0 ? spec : spec.substring(0, at));
+    if (at >= 0 && at == spec.length() - 1) throw new IllegalArgumentException("repo " + spec + " has an empty ref after @");
+    return spec;
+  }
+
+  /**
+   * A repo to start from with options: {@code new CloudOptions.RepoSpec("acme/api").ref("v1.2").depth(5)}. It is
+   * cloned into path (default /workspace/&lt;name&gt;).
+   */
+  public static final class RepoSpec {
+    final String name;
+    String ref;
+    String path;
+    Integer depth;
+
+    public RepoSpec(String name) { this.name = checkRepoName(name); }
+
+    /** A branch, tag or commit sha. Default: the repo's default branch. */
+    public RepoSpec ref(String v) { ref = v; return this; }
+
+    /** Where to clone it. Default /workspace/&lt;name&gt;. */
+    public RepoSpec path(String v) { path = v; return this; }
+
+    /** Clone depth, 1 or more. Default 1. */
+    public RepoSpec depth(int v) {
+      if (v < 1) throw new IllegalArgumentException("repo depth must be 1 or more, not " + v);
+      depth = v;
+      return this;
+    }
+
+    Map<String, Object> body() {
+      Map<String, Object> b = new LinkedHashMap<>();
+      b.put("name", name);
+      if (ref != null) b.put("ref", ref);
+      if (path != null) b.put("path", path);
+      if (depth != null) b.put("depth", depth);
+      return b;
+    }
+  }
+
+  /**
+   * {@link CloudSandbox#push(Push)}: {@code new CloudOptions.Push().branch("fix").message("Fix the bug")}. Unset
+   * fields take the server's defaults (branch kosa8/&lt;short id&gt;, message "Changes from kosa8 sandbox &lt;id&gt;").
+   */
+  public static final class Push {
+    String branch;
+    String message;
+    String path;
+
+    public Push branch(String v) { branch = v; return this; }
+    public Push message(String v) { message = v; return this; }
+    /** The checkout in the sandbox. Default the one it was started from. */
+    public Push path(String v) { path = v; return this; }
+
+    Map<String, Object> body() {
+      Map<String, Object> b = new LinkedHashMap<>();
+      if (branch != null) b.put("branch", branch);
+      if (message != null) b.put("message", message);
+      if (path != null) b.put("path", path);
+      return b;
+    }
+  }
+
+  /**
+   * {@link CloudSandbox#pullRequest(PullRequest)}: {@code new CloudOptions.PullRequest().title("Fix").base("main")}.
+   * A draft unless {@code draft(false)}; base defaults to the repo's default branch.
+   */
+  public static final class PullRequest {
+    String title;
+    String body;
+    String base;
+    String branch;
+    Boolean draft;
+
+    public PullRequest title(String v) { title = v; return this; }
+    public PullRequest body(String v) { body = v; return this; }
+    public PullRequest base(String v) { base = v; return this; }
+    public PullRequest branch(String v) { branch = v; return this; }
+    public PullRequest draft(boolean v) { draft = v; return this; }
+
+    Map<String, Object> toBody() {
+      Map<String, Object> b = new LinkedHashMap<>();
+      if (title != null) b.put("title", title);
+      if (body != null) b.put("body", body);
+      if (base != null) b.put("base", base);
+      if (branch != null) b.put("branch", branch);
+      if (draft != null) b.put("draft", draft);
       return b;
     }
   }

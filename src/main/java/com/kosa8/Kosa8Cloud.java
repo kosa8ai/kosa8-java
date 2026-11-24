@@ -62,6 +62,7 @@ public final class Kosa8Cloud {
   private final CloudApiKeys apiKeys = new CloudApiKeys(this);
   private final CloudAudit audit = new CloudAudit(this);
   private final CloudRl rl = new CloudRl(this);
+  private final CloudGitHub github = new CloudGitHub(this);
 
   private Kosa8Cloud(String key, String baseUrl, Duration timeout, RetryPolicy retry, java.util.function.Consumer<Duration> sleeper) {
     this.key = key;
@@ -192,6 +193,9 @@ public final class Kosa8Cloud {
 
   /** RL run comparison and alert rules (a run itself is {@link Run}). */
   public CloudRl rl() { return rl; }
+
+  /** The org's connected GitHub: status, repos, branches. */
+  public CloudGitHub github() { return github; }
 
   /**
    * A preview's custom domains by its preview id (from {@link CloudPreview}); the same as
@@ -681,7 +685,9 @@ public final class Kosa8Cloud {
       return new Kosa8Exception.ExecTimeoutException(base + hint, status, message.isEmpty() ? null : message,
           null, method, path, body).withCode(code != null ? code : "exec_timeout");
     }
-    Kosa8Exception e = Kosa8Exception.fromResponse(status, msgBody, body, method, path).withCode(code);
+    Kosa8Exception e = Kosa8Exception.githubError(status, code, msgBody, body, method, path);
+    if (e == null) e = Kosa8Exception.fromResponse(status, msgBody, body, method, path);
+    e.withCode(code);
     Duration ra = parseRetryAfter(retryAfter);
     if (e instanceof Kosa8Exception.RateLimitException rl) rl.withRetryAfter(ra);
     if (ra != null) e.withRetryAfterSeconds(ra.toMillis() / 1000.0);

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- GitHub repos: `CloudOptions.Create.repo("owner/name@ref")` or `repo(new CloudOptions.RepoSpec(name).ref(..).path(..).depth(..))`
+  starts a sandbox from a repo of the org's connected GitHub (`CloudSandbox.repoInfo()` says whether the clone is done);
+  `cloud.github()` with `status()`, `repos(query)`, `reposPage(query, page)` and `branches("owner/name")`;
+  `box.repo()` (with changes), `box.push(CloudOptions.Push)` and `box.pullRequest(CloudOptions.PullRequest)`. kosa8 uses a
+  GitHub token for one repo and one operation that never enters the sandbox.
+- Typed GitHub errors: `GitHubNotConnectedException`, `GitHubPermissionsException`, `NoChangesException` (all
+  `ConflictException`), `RepoNotFoundException` (a `NotFoundException`) and `GitHubUnavailableException`; every
+  `ApiException` has `connectUrl()`, `settingsUrl()` and `missingPermissions()`.
+
 ## 0.7.0 - 2026-11-23
 
 - RL rollouts: each flushed chunk carries an Idempotency-Key that stays with those rows until kosa8

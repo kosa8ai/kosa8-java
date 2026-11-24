@@ -173,6 +173,23 @@ cloud.pipelines().logs((String) run.get("id"), null, null);
 Also `runs`, `get`, `cancel`, `artifacts`, `downloadArtifact`, `createHook` (webhook URL and
 optional cron), `hooks`, `deleteHook`.
 
+### GitHub repos
+
+An admin connects GitHub once (app.kosa8.com Settings, or `kosa8 github connect`). Then:
+
+```java
+cloud.github().repos("api");                 // also status(), reposPage(query, page), branches("acme/api")
+CloudSandbox box = cloud.sandboxes().create(new CloudOptions.Create().repo("acme/api@main"));
+box.exec(List.of("sh", "-c", "cd /workspace/api && make fix"));
+Map<String, Object> pr = box.pullRequest(new CloudOptions.PullRequest().title("Fix the build"));
+// or box.push(new CloudOptions.Push().branch("fix")); box.repo() shows the changes
+```
+
+kosa8 mints a GitHub token for one repo and one operation (at most an hour); it never enters the
+sandbox. Errors: `GitHubNotConnectedException` (`connectUrl()`), `GitHubPermissionsException`
+(`missingPermissions()`, `settingsUrl()`), `NoChangesException`, `RepoNotFoundException`,
+`GitHubUnavailableException`.
+
 ### Functions
 
 ```java

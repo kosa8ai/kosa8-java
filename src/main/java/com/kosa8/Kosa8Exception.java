@@ -186,6 +186,21 @@ public class Kosa8Exception extends RuntimeException {
      * 402 {@code plan_limit}: the ways past the limit, cheaper first ({kind: pack|upgrade, addon, plan, label,
      * monthly_usd, url}); empty when none were sent.
      */
+    /** 409 {@code github_not_connected}: where an admin connects GitHub. */
+    public String connectUrl() { return bodyString(body(), "connect_url"); }
+
+    /** 409 {@code github_permissions}: where on GitHub to approve the permissions kosa8 lacks. */
+    public String settingsUrl() { return bodyString(body(), "settings_url"); }
+
+    /** 409 {@code github_permissions}: the GitHub App permissions missing (contents:write, ...); empty otherwise. */
+    public java.util.List<String> missingPermissions() {
+      java.util.List<String> out = new java.util.ArrayList<>();
+      if (body() instanceof Map<?, ?> m && m.get("missing") instanceof java.util.List<?> l) {
+        for (Object o : l) if (o instanceof String s) out.add(s);
+      }
+      return out;
+    }
+
     @SuppressWarnings("unchecked")
     public java.util.List<Map<String, Object>> options() {
       java.util.List<Map<String, Object>> out = new java.util.ArrayList<>();
@@ -264,6 +279,31 @@ public class Kosa8Exception extends RuntimeException {
   /** 409 */
   public static class ConflictException extends ApiException {
     public ConflictException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** 409 {@code github_not_connected}: the org has not connected GitHub; an admin connects it at {@link #connectUrl()}. */
+  public static class GitHubNotConnectedException extends ConflictException {
+    public GitHubNotConnectedException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** 409 {@code github_permissions}: the kosa8 GitHub App lacks {@link #missingPermissions()}; approve them at {@link #settingsUrl()}. */
+  public static class GitHubPermissionsException extends ConflictException {
+    public GitHubPermissionsException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** 409 {@code no_changes}: nothing changed in the sandbox's repo, so there is nothing to push. */
+  public static class NoChangesException extends ConflictException {
+    public NoChangesException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** 404 {@code repo_not_found}: the repo is not visible to the org's GitHub installations (or does not exist). */
+  public static class RepoNotFoundException extends NotFoundException {
+    public RepoNotFoundException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** 502 {@code github_unavailable}: GitHub did not answer or rate-limited kosa8; try again after {@link #retryAfterSeconds()}. */
+  public static class GitHubUnavailableException extends ApiException {
+    public GitHubUnavailableException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
   /** 429: too many requests, or a quota reached ({@code quota_exceeded}). */
@@ -351,6 +391,19 @@ public class Kosa8Exception extends RuntimeException {
       case 501 -> new UnsupportedException(text, status, msg, rem, method, path, body);
       default -> new ApiException(text, status, msg, rem, method, path, body);
     };
+  }
+
+  /** The GitHub error for kosa8 Cloud's code, or null when the code is not one of them. */
+  static Kosa8Exception githubError(int status, String code, Object msgBody, Object body, String method, String path) {
+    if (code == null) return null;
+    String msg = msgBody instanceof Map<?, ?> m && m.get("error") instanceof String s && !s.isEmpty() ? s : null;
+    String text = msg != null ? msg : "request failed with HTTP " + status;
+    if (status == 409 && code.equals("github_not_connected")) return new GitHubNotConnectedException(text, status, msg, null, method, path, body);
+    if (status == 409 && code.equals("github_permissions")) return new GitHubPermissionsException(text, status, msg, null, method, path, body);
+    if (status == 409 && code.equals("no_changes")) return new NoChangesException(text, status, msg, null, method, path, body);
+    if (status == 404 && code.equals("repo_not_found")) return new RepoNotFoundException(text, status, msg, null, method, path, body);
+    if (code.equals("github_unavailable")) return new GitHubUnavailableException(text, status, msg, null, method, path, body);
+    return null;
   }
 
   static Double bodyNumber(Object body, String key) {
