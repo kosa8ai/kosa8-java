@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- RL rollouts: each flushed chunk carries an Idempotency-Key that stays with those rows until kosa8
+  Cloud answers, so a flush whose answer was lost and is resent later is stored once.
 - `CloudExecResult` gains `stdoutTruncated()`, `stderrTruncated()`, `stdoutBytes()` and `stderrBytes()`: a
   buffered exec keeps the first and last 1 MiB of each stream, and now says when it dropped the middle.
 - `CloudOptions.Create.kvm(boolean)` (preview, /dev/kvm). `CloudOptions.List.limit` checks 1 to 500, the

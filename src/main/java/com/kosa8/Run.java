@@ -162,6 +162,10 @@ public final class Run implements AutoCloseable {
   private volatile Map<String, Object> info = new LinkedHashMap<>();
   private volatile String status;
   private final List<Map<String, Object>> buf = new ArrayList<>();
+  // The chunk being sent and its Idempotency-Key, kept together (guarded by buf) until kosa8 Cloud answers: a later
+  // flush resends the same rows with the same key, so a send whose answer was lost is stored once.
+  private List<Map<String, Object>> inflight;
+  private String inflightKey;
   private final Object flushLock = new Object();
   private ScheduledExecutorService ticker;
   private volatile boolean open;
@@ -292,7 +296,7 @@ public final class Run implements AutoCloseable {
   }
 
   /** Rollouts buffered, not yet sent. */
-  public int pending() { synchronized (buf) { return buf.size(); } }
+  public int pending() { synchronized (buf) { return buf.size() + (inflight == null ? 0 : inflight.size()); } }
 
   /** Send every buffered rollout now, 500 a call; returns how many were recorded. On an error the unsent stay buffered. */
   public int flush() {
@@ -300,18 +304,23 @@ public final class Run implements AutoCloseable {
     synchronized (flushLock) {
       while (true) {
         List<Map<String, Object>> chunk;
+        String key;
         synchronized (buf) {
-          int n = Math.min(buf.size(), MAX_ROWS_PER_CALL);
-          if (n == 0) return sent;
-          chunk = new ArrayList<>(buf.subList(0, n));
-          buf.subList(0, n).clear();
+          if (inflight == null) {
+            int n = Math.min(buf.size(), MAX_ROWS_PER_CALL);
+            if (n == 0) return sent;
+            inflight = new ArrayList<>(buf.subList(0, n));
+            inflightKey = java.util.UUID.randomUUID().toString();
+            buf.subList(0, n).clear();
+          }
+          chunk = inflight;
+          key = inflightKey;
         }
-        Map<String, Object> r;
-        try {
-          r = Kosa8Cloud.obj(cloud.request("POST", p("/rollouts"), Map.of("rollouts", chunk)));
-        } catch (RuntimeException e) {
-          synchronized (buf) { buf.addAll(0, chunk); }
-          throw e;
+        // On an error the chunk stays in flight with its key, for the next flush.
+        Map<String, Object> r = Kosa8Cloud.obj(cloud.request("POST", p("/rollouts"), Map.of("rollouts", chunk), key));
+        synchronized (buf) {
+          inflight = null;
+          inflightKey = null;
         }
         int n = r.get("recorded") instanceof Number x ? x.intValue() : chunk.size();
         sent += n;
