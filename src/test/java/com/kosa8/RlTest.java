@@ -549,6 +549,38 @@ public final class RlTest extends ClientTest {
     }
   }
 
+  public void testRunFlushResendsAFailedChunkWithItsKey() throws Exception {
+    AtomicInteger fail = new AtomicInteger(1);
+    try (Stub stub = new Stub(s -> {
+      String r = s.method() + " " + s.path();
+      if (r.equals("POST /v1/rl/runs/run_k/rollouts")) {
+        if (fail.getAndDecrement() > 0) return new Answer(400, m("error", "invalid_rollout", "message", "lost"));
+        return new Answer(200, m("recorded", ((List<?>) ((Map<?, ?>) s.body()).get("rollouts")).size()));
+      }
+      if (r.equals("PATCH /v1/rl/runs/run_k")) return new Answer(200, m("run", m("id", "run_k")));
+      return new Answer(200, m("deleted", 0, "failed", List.of(), "more", false, "run", m("id", "run_k")));
+    })) {
+      Kosa8Cloud cloud = stub.cloud();
+      Run run = Run.attach(cloud, "run_k", new Run.Options().drainOnExit(false).flushEvery(100));
+      run.record(List.of(m("index", 1), m("index", 2)));
+      raises(Kosa8Exception.class, run::flush);
+      eq(2, run.pending(), "the chunk stays pending");
+      run.record(m("index", 3));
+      eq(3, run.flush(), "all recorded");
+      eq(0, run.pending(), "nothing pending");
+      List<String> keys = new ArrayList<>();
+      List<Integer> sizes = new ArrayList<>();
+      for (var x : seen(stub, "POST", "/v1/rl/runs/run_k/rollouts")) {
+        keys.add(x.headers().get("idempotency-key"));
+        sizes.add(((List<?>) ((Map<?, ?>) x.body()).get("rollouts")).size());
+      }
+      eq(List.of(2, 2, 1), sizes, "the failed chunk resent whole, then the new row");
+      check(keys.get(0) != null && keys.get(0).equals(keys.get(1)), "the failed chunk's key reused: " + keys);
+      check(keys.get(2) != null && !keys.get(2).equals(keys.get(1)), "a new key for the next chunk: " + keys);
+      run.close();
+    }
+  }
+
   public void testRunHeartbeatThread() throws Exception {
     try (Stub stub = new Stub(s -> {
       if (s.path().equals("/v1/sandboxes/heartbeat")) return new Answer(200, m("extended", 3));
