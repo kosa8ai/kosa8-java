@@ -139,10 +139,60 @@ public class Kosa8Exception extends RuntimeException {
     }
   }
 
-  /** Any HTTP error answer. */
+  /**
+   * Any HTTP error answer. kosa8 Cloud's error body fields are read here, so every subclass has them: a 402
+   * ({@link PaymentRequiredException}) and a 429 {@code quota_exceeded} ({@link RateLimitException}) alike.
+   * Each is null when the answer did not carry it.
+   */
   public static class ApiException extends Kosa8Exception {
     public ApiException(String m, int st, String dm, String rem, String method, String path, Object body) {
       super(m, st, dm, rem, method, path, body, null);
+    }
+
+    /** 402: where the person adds a payment method or credit, picks a plan or raises the cap. */
+    public String upgradeUrl() { return bodyString(body(), "upgrade_url"); }
+
+    /**
+     * 402 and 429 {@code quota_exceeded}: a sentence an AI agent should relay to its person word for word (and
+     * then stop, not retry).
+     */
+    public String agentMessage() { return bodyString(body(), "agent_message"); }
+
+    /** 429 {@code quota_exceeded}: where to ask for a higher limit (POST /v1/limits/request). */
+    public String requestUrl() { return bodyString(body(), "request_url"); }
+
+    /** 402 {@code plan_limit}: which limit, e.g. sandbox_hours, running, size, persistent or snapshots. */
+    public String limitName() { return bodyString(body(), "limit_name"); }
+
+    /** 402 {@code plan_limit}: the plan's limit. */
+    public Double limit() { return bodyNumber(body(), "limit"); }
+
+    /** 402 {@code plan_limit}: what the organization has used (for size, the vCPU asked for). */
+    public Double used() { return bodyNumber(body(), "used"); }
+
+    /** 402 {@code plan_limit} and {@code plan_feature}: the organization's plan. */
+    public String plan() { return bodyString(body(), "plan"); }
+
+    /** 402 {@code plan_limit} and {@code plan_feature}: the first plan that includes more; null means contact sales. */
+    public String nextPlan() { return bodyString(body(), "next_plan"); }
+
+    /** 402 {@code plan_feature}: the feature the plan lacks. */
+    public String feature() { return bodyString(body(), "feature"); }
+
+    /** 402 {@code plan_limit}: where to add the add-on pack for this limit, when one is sold. */
+    public String packUrl() { return bodyString(body(), "pack_url"); }
+
+    /**
+     * 402 {@code plan_limit}: the ways past the limit, cheaper first ({kind: pack|upgrade, addon, plan, label,
+     * monthly_usd, url}); empty when none were sent.
+     */
+    @SuppressWarnings("unchecked")
+    public java.util.List<Map<String, Object>> options() {
+      java.util.List<Map<String, Object>> out = new java.util.ArrayList<>();
+      if (body() instanceof Map<?, ?> m && m.get("options") instanceof java.util.List<?> l) {
+        for (Object o : l) if (o instanceof Map<?, ?> x) out.add((Map<String, Object>) x);
+      }
+      return out;
     }
   }
 
@@ -186,15 +236,6 @@ public class Kosa8Exception extends RuntimeException {
    */
   public static class PaymentRequiredException extends ApiException {
     public PaymentRequiredException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
-
-    /** Where the person adds a payment method or credit; null when the cloud sent none. */
-    public String upgradeUrl() { return bodyString(body(), "upgrade_url"); }
-
-    /**
-     * A sentence an AI agent should relay to its person word for word (and then stop, not retry);
-     * null when the cloud sent none.
-     */
-    public String agentMessage() { return bodyString(body(), "agent_message"); }
   }
 
   /**
@@ -304,6 +345,10 @@ public class Kosa8Exception extends RuntimeException {
       case 501 -> new UnsupportedException(text, status, msg, rem, method, path, body);
       default -> new ApiException(text, status, msg, rem, method, path, body);
     };
+  }
+
+  static Double bodyNumber(Object body, String key) {
+    return body instanceof Map<?, ?> m && m.get(key) instanceof Number n ? n.doubleValue() : null;
   }
 
   static String bodyString(Object body, String key) {

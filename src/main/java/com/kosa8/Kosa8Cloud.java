@@ -502,7 +502,7 @@ public final class Kosa8Cloud {
     return e.withDetail(detail(e, body));
   }
 
-  /** The 401 hint, then {@code " [HTTP <status> <code>; retry in <n> s; request <id>; upgrade: <url>]"}. */
+  /** The 401 hint, then {@code " [HTTP <status> <code>; retry in <n> s; request <id>; upgrade: <url>; ask for more: <url>]"}. */
   static String detail(Kosa8Exception e, Object body) {
     StringBuilder b = new StringBuilder();
     String sentence = e.daemonMessage() == null ? "" : e.daemonMessage();
@@ -521,6 +521,10 @@ public final class Kosa8Cloud {
     if (e.status() == 402 && body instanceof Map<?, ?> m && m.get("upgrade_url") instanceof String u && !u.isEmpty()
         && !sentence.contains(u)) {
       b.append("; upgrade: ").append(u);
+    }
+    if (e.status() == 429 && body instanceof Map<?, ?> m && m.get("request_url") instanceof String u && !u.isEmpty()
+        && !sentence.contains(u)) {
+      b.append("; ask for more: ").append(u);
     }
     return b.append(']').toString();
   }

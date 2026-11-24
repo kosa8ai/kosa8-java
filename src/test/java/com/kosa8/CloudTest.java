@@ -579,6 +579,37 @@ public final class CloudTest extends ClientTest {
     }
   }
 
+  public void testQuotaAndPlanLimitFieldsOnEveryApiError() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(429, Map.of("error", "quota_exceeded", "message", "the running limit is reached", "retryable", false,
+            "failure_class", "quota", "agent_message", "Ask your person to raise the limit.",
+            "request_url", "https://app.kosa8.com/app#limits")),
+        new Answer(402, Map.ofEntries(Map.entry("error", "plan_limit"), Map.entry("message", "the plan allows 5 running"),
+            Map.entry("limit_name", "running"), Map.entry("limit", 5), Map.entry("used", 5), Map.entry("plan", "starter"),
+            Map.entry("next_plan", "team"), Map.entry("pack_url", "https://app.kosa8.com/app#packs"),
+            Map.entry("upgrade_url", "https://app.kosa8.com/app#billing"), Map.entry("agent_message", "Tell your person."),
+            Map.entry("options", List.of(Map.of("kind", "pack", "addon", "running-5"), Map.of("kind", "upgrade", "plan", "team")))))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      Kosa8Cloud cloud = stub.cloud();
+      var q = raises(Kosa8Exception.RateLimitException.class, () -> cloud.sandboxes().create());
+      eq("Ask your person to raise the limit.", q.agentMessage(), "429 agentMessage");
+      eq("https://app.kosa8.com/app#limits", q.requestUrl(), "429 requestUrl");
+      check(q.getMessage().contains("ask for more: https://app.kosa8.com/app#limits"), "429 message names request_url: " + q.getMessage());
+      check(!q.retryable(), "quota_exceeded is not retryable");
+      eq(1, stub.seen.size(), "quota_exceeded is not retried");
+      var p = raises(Kosa8Exception.PaymentRequiredException.class, () -> cloud.sandboxes().create());
+      eq("running", p.limitName(), "limitName");
+      eq(5.0, p.limit(), "limit");
+      eq(5.0, p.used(), "used");
+      eq("starter", p.plan(), "plan");
+      eq("team", p.nextPlan(), "nextPlan");
+      eq("https://app.kosa8.com/app#packs", p.packUrl(), "packUrl");
+      eq(2, p.options().size(), "options");
+      eq("pack", p.options().get(0).get("kind"), "cheaper first");
+      eq(null, p.requestUrl(), "no requestUrl on a 402");
+    }
+  }
+
   public void testCloudRetryAfterParsing() {
     eq(Duration.ofMillis(1500), Kosa8Cloud.parseRetryAfter("1.5"), "decimal seconds");
     eq(null, Kosa8Cloud.parseRetryAfter(null), "absent");
