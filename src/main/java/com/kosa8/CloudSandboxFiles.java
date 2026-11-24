@@ -7,8 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Files in a kosa8 Cloud sandbox ({@code box.files()}), at most 8 MiB each. Paths are absolute, such
- * as {@code /workspace/app.py}; only {@code /workspace} outlives an exec. A sleeping sandbox wakes first.
+ * Files in a kosa8 Cloud sandbox ({@code box.files()}). Paths are absolute, such as {@code /workspace/app.py};
+ * only {@code /workspace} outlives an exec. A sleeping sandbox wakes first. Through the API one request body is at
+ * most 100 MB: {@link #uploadFile} sends a bigger file in parts, and {@link #downloadTo} streams one to disk. A host
+ * without streamed files caps a file at 8 MiB.
  *
  * <p>Needs the host's data plane; on hosts without it the API answers 501 ({@code not_available} /
  * {@code not_supported}), thrown as {@link Kosa8Exception.UnsupportedException}. Not every kosa8
@@ -65,10 +67,77 @@ public final class CloudSandboxFiles {
   /** A file of any size (no 8 MiB cap), streamed by the host. */
   public byte[] download(String path) { return sb.cloud().requestBytes("GET", q("/files/raw", path, false)); }
 
-  /** Write a file of any size, streamed to the host; returns its info. */
+  /**
+   * Write a file streamed to the host (no 8 MiB cap); returns its info. One request body is at most 100 MB
+   * through the API: {@link #uploadFile} sends a bigger one in parts.
+   */
   public CloudFileInfo upload(String path, byte[] content) {
     if (content == null) throw new IllegalArgumentException("content is required");
     return CloudFileInfo.of(Kosa8Cloud.obj(Kosa8Cloud.obj(sb.cloud().requestUpload("PUT", q("/files/raw", path, false), content)).get("file")));
+  }
+
+  /**
+   * Bytes start to end of a file, both inclusive (end null: to the end of the file), with an HTTP Range: a
+   * part of a big file or a log's tail without downloading it all. 416 past the end of the file.
+   */
+  public byte[] readRange(String path, long start, Long end) {
+    if (start < 0 || (end != null && end < start)) throw new IllegalArgumentException("need 0 <= start <= end, not " + start + "-" + end);
+    return sb.cloud().requestBytes("GET", q("/files", path, false), Map.of("Range", "bytes=" + start + "-" + (end == null ? "" : end)));
+  }
+
+  /**
+   * Write data at byte offset of the file, keeping the rest of it and growing it as needed: the parts of a big
+   * upload, in any order. Safe to retry (the same bytes land in the same place).
+   */
+  public CloudFileInfo writeAt(String path, byte[] data, long offset) {
+    if (data == null) throw new IllegalArgumentException("data is required");
+    if (offset < 0) throw new IllegalArgumentException("offset must be 0 or more");
+    return CloudFileInfo.of(Kosa8Cloud.obj(Kosa8Cloud.obj(
+        sb.cloud().requestUpload("PUT", q("/files", path, false) + "&offset=" + offset, data)).get("file")));
+  }
+
+  /**
+   * Add data at the end of the file (made if missing). Never retried after it may have reached the host, since
+   * a second send would add it twice; use {@link #writeAt} where a retry must be safe.
+   */
+  public CloudFileInfo append(String path, byte[] data) {
+    if (data == null) throw new IllegalArgumentException("data is required");
+    return CloudFileInfo.of(Kosa8Cloud.obj(Kosa8Cloud.obj(
+        sb.cloud().requestUpload("PUT", q("/files", path, false) + "&append=1", data)).get("file")));
+  }
+
+  /** The size of one part of {@link #uploadFile}: under the API's 100 MB request limit. */
+  public static final int PART_BYTES = 64 * 1024 * 1024;
+
+  /**
+   * Upload a local file of any size: the first part replaces the file, the rest are written at their offsets
+   * (each retried on its own), so a file over the API's 100 MB request limit works. Holds one part in memory.
+   */
+  public CloudFileInfo uploadFile(String path, java.nio.file.Path local) {
+    return uploadFile(path, local, PART_BYTES);
+  }
+
+  CloudFileInfo uploadFile(String path, java.nio.file.Path local, int partBytes) {
+    if (local == null) throw new IllegalArgumentException("a local file is required");
+    try (java.io.InputStream in = java.nio.file.Files.newInputStream(local)) {
+      CloudFileInfo info = null;
+      long off = 0;
+      while (true) {
+        byte[] part = in.readNBytes(partBytes);
+        if (off == 0) info = write(path, part);
+        else if (part.length > 0) info = writeAt(path, part, off);
+        if (part.length < partBytes) return info;
+        off += part.length;
+      }
+    } catch (java.io.IOException e) {
+      throw new java.io.UncheckedIOException("could not read " + local, e);
+    }
+  }
+
+  /** Download a file of any size straight to local (replaced), streamed, never held whole in memory. */
+  public void downloadTo(String path, java.nio.file.Path local) {
+    if (local == null) throw new IllegalArgumentException("a local file is required");
+    sb.cloud().requestToFile(q("/files", path, false), local);
   }
 
   /**

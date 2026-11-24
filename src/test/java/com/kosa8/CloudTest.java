@@ -6,6 +6,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -663,6 +665,50 @@ public final class CloudTest extends ClientTest {
       eq("e", t.stderr(), "504 stderr so far");
       eq("bg_1", box.execBackground(List.of("sleep", "999"), null, null, 600).id(), "background id");
       eq(600, ((Number) ((Map<?, ?>) stub.seen.get(1).body()).get("timeout_s")).intValue(), "background timeout_s");
+    }
+  }
+
+  public void testFileRangesPartsAndAppend() throws Exception {
+    Map<String, Object> file = Map.of("file", Map.of("path", "/workspace/big.bin", "size", 10));
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(206, "lo".getBytes(StandardCharsets.UTF_8)),          // readRange
+        new Answer(200, file), new Answer(200, file),                      // writeAt, append
+        new Answer(502, Map.of("error", "host_failed", "message", "boom", "retryable", true)), // append: not retried
+        new Answer(200, file), new Answer(200, file), new Answer(200, file), // uploadFile: 3 parts of 4
+        new Answer(503, Map.of("error", "host_failed", "message", "boom", "retryable", true)), // writeAt retried
+        new Answer(200, file),
+        new Answer(200, "0123456789".getBytes(StandardCharsets.UTF_8))));  // downloadTo
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      List<Duration> sleeps = new ArrayList<>();
+      Kosa8Cloud cloud = stub.cloud(sleeps);
+      CloudSandboxFiles f = new CloudSandbox(cloud, sbx("running")).files();
+      eq("lo", new String(f.readRange("/workspace/a b.txt", 3, 4L), StandardCharsets.UTF_8), "range bytes");
+      eq("bytes=3-4", stub.seen.get(0).headers().get("range"), "Range header");
+      eq("/v1/sandboxes/sbx_1/files?path=%2Fworkspace%2Fa%20b.txt", stub.seen.get(0).path(), "path encoded");
+      f.writeAt("/workspace/big.bin", new byte[] {1, 2}, 8);
+      check(stub.seen.get(1).path().endsWith("&offset=8"), stub.seen.get(1).path());
+      f.append("/workspace/log", new byte[] {3});
+      check(stub.seen.get(2).path().endsWith("&append=1"), stub.seen.get(2).path());
+      raises(Kosa8Exception.ApiException.class, () -> f.append("/workspace/log", new byte[] {3}));
+      eq(4, stub.seen.size(), "an append is never sent twice");
+      Path local = Files.createTempFile("kosa8-up", ".bin");
+      Path down = Files.createTempFile("kosa8-down", ".bin");
+      try {
+        Files.write(local, "0123456789".getBytes(StandardCharsets.UTF_8));
+        f.uploadFile("/workspace/big.bin", local, 4);
+        eq("/v1/sandboxes/sbx_1/files?path=%2Fworkspace%2Fbig.bin", stub.seen.get(4).path(), "first part replaces");
+        eq("0123", new String(stub.seen.get(4).raw(), StandardCharsets.UTF_8), "part 1");
+        check(stub.seen.get(5).path().endsWith("&offset=4"), "part 2 at 4");
+        check(stub.seen.get(6).path().endsWith("&offset=8"), "part 3 at 8");
+        eq("89", new String(stub.seen.get(6).raw(), StandardCharsets.UTF_8), "last part");
+        f.writeAt("/workspace/big.bin", new byte[] {9}, 0);
+        eq(9, stub.seen.size(), "an offset write is retried");
+        f.downloadTo("/workspace/big.bin", down);
+        eq("0123456789", Files.readString(down), "streamed to disk");
+      } finally {
+        Files.deleteIfExists(local);
+        Files.deleteIfExists(down);
+      }
     }
   }
 

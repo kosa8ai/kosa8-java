@@ -396,15 +396,40 @@ public final class Kosa8Cloud {
    * of a server-side failure is a new attempt.
    */
   private Object send(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey) {
+    return send(method, path, body, raw, rawAnswer, idemKey, Map.of(), null);
+  }
+
+  /** The answer's raw bytes, with extra request headers (a Range). */
+  byte[] requestBytes(String method, String path, Map<String, String> headers) {
+    return (byte[]) send(method, path, null, null, true, null, headers, null);
+  }
+
+  /** The answer's bytes written to file (replaced), streamed: never held whole in memory. Retried as a GET. */
+  void requestToFile(String path, java.nio.file.Path file) {
+    send("GET", path, null, null, true, null, Map.of(), file);
+  }
+
+  /** An append adds the body again each time it is sent: never retried once it may have reached the host. */
+  static boolean appends(String method, String path) {
+    if (!"PUT".equals(method)) return false;
+    int q = path.indexOf('?');
+    if (q < 0) return false;
+    for (String kv : path.substring(q + 1).split("&")) if (kv.startsWith("append=")) return true;
+    return false;
+  }
+
+  private Object send(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey,
+      Map<String, String> headers, java.nio.file.Path sink) {
     checkIdempotencyKey(idemKey);
     boolean ownKey = idemKey == null && keyedRoute(method, path);
     String idem = ownKey ? java.util.UUID.randomUUID().toString() : idemKey;
     int q = path.indexOf('?');
     String bare = q < 0 ? path : path.substring(0, q);
-    boolean safe = idem != null || SAFE.contains(method) || bare.equals("/v1/sandboxes/heartbeat") || bare.equals("/v1/sandboxes/drain");
+    boolean safe = !appends(method, path)
+        && (idem != null || SAFE.contains(method) || bare.equals("/v1/sandboxes/heartbeat") || bare.equals("/v1/sandboxes/drain"));
     for (int attempt = 1; ; attempt++) {
       try {
-        return sendOnce(method, path, body, raw, rawAnswer, idem);
+        return sendOnce(method, path, body, raw, rawAnswer, idem, headers, sink);
       } catch (Kosa8Exception e) {
         if (!retry.shouldRetry(e, attempt) || !(safe || rejectedBeforeRunning(e))) throw e;
         sleeper.accept(retry.delay(e, attempt));
@@ -432,11 +457,14 @@ public final class Kosa8Cloud {
         || (e.status() == 409 && "template_building".equals(e.code()));
   }
 
-  private Object sendOnce(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey) {
+  private Object sendOnce(String method, String path, Object body, byte[] raw, boolean rawAnswer, String idemKey,
+      Map<String, String> headers, java.nio.file.Path sink) {
     HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(timeout)
         .header("Authorization", "Bearer " + key).header("User-Agent", "kosa8-java/" + Kosa8Client.VERSION)
         .header("Accept", rawAnswer ? "application/octet-stream" : "application/json");
     if (idemKey != null) rb.header("Idempotency-Key", idemKey);
+    headers.forEach(rb::header);
+    if (sink != null) return sendToFile(rb.method(method, HttpRequest.BodyPublishers.noBody()).build(), method, path, sink);
     if (raw != null) {
       rb.header("Content-Type", "application/octet-stream");
       rb.method(method, HttpRequest.BodyPublishers.ofByteArray(raw));
@@ -547,6 +575,38 @@ public final class Kosa8Cloud {
     var h = resp.headers();
     throw cloudError(resp.statusCode(), parsed, method, path, h.firstValue("Retry-After").orElse(null),
         h.firstValue("X-Request-Id").or(() -> h.firstValue("cf-ray")).orElse(null));
+  }
+
+  private Object sendToFile(HttpRequest req, String method, String path, java.nio.file.Path file) {
+    HttpResponse<java.io.InputStream> resp;
+    try {
+      resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+    } catch (HttpTimeoutException e) {
+      throw new Kosa8Exception.TimeoutException("kosa8 Cloud did not answer within " + timeout.toMillis() / 1000.0 + " s", method, path);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new Kosa8Exception.ConnectionException("interrupted talking to kosa8 Cloud", method, path, e);
+    } catch (IOException e) {
+      throw new Kosa8Exception.ConnectionException("could not reach kosa8 Cloud at " + baseUrl + ": " + e.getMessage(), method, path, e);
+    }
+    try (java.io.InputStream in = resp.body()) {
+      if (resp.statusCode() >= 400) {
+        String text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        Object parsed;
+        try {
+          parsed = text.isEmpty() ? null : Json.parse(text);
+        } catch (RuntimeException e) {
+          parsed = text;
+        }
+        var h = resp.headers();
+        throw cloudError(resp.statusCode(), parsed, method, path, h.firstValue("Retry-After").orElse(null),
+            h.firstValue("X-Request-Id").or(() -> h.firstValue("cf-ray")).orElse(null));
+      }
+      java.nio.file.Files.copy(in, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      return null;
+    } catch (IOException e) {
+      throw new Kosa8Exception.ConnectionException("download from kosa8 Cloud broke: " + e.getMessage(), method, path, e);
+    }
   }
 
   static boolean isExecPath(String path) {

@@ -488,7 +488,7 @@ public final class CloudSandbox {
   }
 
   /**
-   * Files in the sandbox, at most 8 MiB each.
+   * Files in the sandbox (see {@link CloudSandboxFiles} for sizes, ranges and parts).
    *
    * <p>Needs the host's data plane; on hosts without it the API answers 501 ({@code not_available}
    * / {@code not_supported}), thrown as {@link Kosa8Exception.UnsupportedException}. Not every

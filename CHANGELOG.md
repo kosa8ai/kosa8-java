@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Files: `readRange(path, start, end)` (HTTP Range), `writeAt(path, data, offset)`, `append(path, data)`,
+  `uploadFile(path, localPath)` (64 MiB parts at their offsets, so files over the API's 100 MB request limit
+  work) and `downloadTo(path, localPath)` (streamed to disk, never held in memory). An append is never retried
+  once it may have reached the host (a retry would add the data twice); an offset write is.
 - `CloudSandbox.execStream(cmd, image, env, timeoutS, onStdout, onStderr)`: a streamed exec (`stream: true`),
   as Python's `exec_stream` and TypeScript's `execStream`. Output reaches the callbacks as UTF-8 text while
   the command prints (heartbeat frames skipped, characters never split across frames); not held to 90 s,
