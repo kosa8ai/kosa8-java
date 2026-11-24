@@ -712,6 +712,25 @@ public final class CloudTest extends ClientTest {
     }
   }
 
+  public void testExecTruncationListLimitAndKvm() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(200, Map.of("exit", 0, "stdout", "a[k8agent: 9 bytes of output dropped]b", "stderr", "",
+            "stdout_truncated", true, "stdout_bytes", 3145728, "stderr_bytes", 0)),
+        new Answer(201, Map.of("sandbox", sbx("running")))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      Kosa8Cloud cloud = stub.cloud();
+      CloudExecResult r = new CloudSandbox(cloud, sbx("running")).exec("yes | head -c 3M");
+      check(r.stdoutTruncated(), "stdout truncated");
+      check(!r.stderrTruncated(), "stderr whole");
+      eq(3145728L, r.stdoutBytes(), "stdout bytes");
+      eq(0L, r.stderrBytes(), "stderr bytes");
+      cloud.sandboxes().create(new CloudOptions.Create().size("2x4").kvm(true));
+      eq(true, ((Map<?, ?>) stub.seen.get(1).body()).get("kvm"), "kvm sent");
+      raises(IllegalArgumentException.class, () -> new CloudOptions.List().limit(501));
+      raises(IllegalArgumentException.class, () -> new CloudOptions.Create().snapshot("snap_12345678").kvm(true).body());
+    }
+  }
+
   public void testQuotaAndPlanLimitFieldsOnEveryApiError() throws Exception {
     List<Answer> answers = new ArrayList<>(List.of(
         new Answer(429, Map.of("error", "quota_exceeded", "message", "the running limit is reached", "retryable", false,

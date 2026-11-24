@@ -56,6 +56,7 @@ public final class CloudOptions {
     Boolean aiGateway;
     Boolean persistent;
     Boolean docker;
+    Boolean kvm;
     String cpu;
     String name;
     Map<String, String> labels;
@@ -96,6 +97,11 @@ public final class CloudOptions {
     public Create persistent(boolean v) { persistent = v; return this; }
     /** Let it run its own Docker engine (start dockerd first); needs a size or image, makes it persistent. */
     public Create docker(boolean v) { docker = v; return this; }
+    /**
+     * Preview: give the sandbox /dev/kvm (an Android emulator at hardware speed). Needs a size or image, implies
+     * persistent and docker, never sleeps; 501 not_available while no host offers nested KVM.
+     */
+    public Create kvm(boolean v) { kvm = v; return this; }
     /** "shared" (default) or "dedicated": whole physical cores; never sleeps, no checkpoint or fork. */
     public Create cpu(String v) { cpu = v; return this; }
     /** Your label for it; {@code new CloudOptions.List().name(...)} finds it. */
@@ -175,6 +181,7 @@ public final class CloudOptions {
       }
       if (persistent != null) b.put("persistent", persistent);
       if (docker != null) b.put("docker", docker);
+      if (kvm != null) b.put("kvm", kvm);
       if (record != null) b.put("record", record);
       if (aiGateway != null) b.put("ai_gateway", aiGateway);
       if (cpu != null) {
@@ -194,7 +201,7 @@ public final class CloudOptions {
       if (egress != null) b.put("egress", egress);
       if (snapshot != null) {
         if (!SNAPSHOT_ID.matcher(snapshot).matches()) throw new IllegalArgumentException("snapshot is a snapshot id (snap_...), not " + snapshot);
-        for (String k : java.util.List.of("template", "region", "size", "cpus", "image", "disk_gb", "persistent", "docker", "cpu")) {
+        for (String k : java.util.List.of("template", "region", "size", "cpus", "image", "disk_gb", "persistent", "docker", "kvm", "cpu")) {
           if (b.containsKey(k)) {
             throw new IllegalArgumentException("a create from a snapshot takes the snapshot's " + k + "; set only env, name, labels, a lifetime or sleepAfterS");
           }
@@ -312,9 +319,9 @@ public final class CloudOptions {
 
     /** Deleted ones too. */
     public List all(boolean v) { all = v; return this; }
-    /** At most this many per page (a server that does not page yet answers everything). */
+    /** At most this many per page, 1 to 500 (the default). */
     public List limit(int v) {
-      if (v < 1) throw new IllegalArgumentException("limit must be 1 or more");
+      if (v < 1 || v > 500) throw new IllegalArgumentException("limit must be 1 to 500, not " + v);
       limit = v;
       return this;
     }

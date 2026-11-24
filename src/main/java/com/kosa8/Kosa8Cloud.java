@@ -760,7 +760,7 @@ public final class Kosa8Cloud {
       return box;
     }
 
-    /** The org's live sandboxes. */
+    /** The org's live sandboxes: the first page (up to 500); {@link #listAll()} for every one. */
     public List<CloudSandbox> list() { return list(false); }
 
     /** The org's sandboxes; with all, deleted ones too. */
@@ -773,8 +773,8 @@ public final class Kosa8Cloud {
     public CloudSandboxPage listPage() { return listPage(null); }
 
     /**
-     * One page of sandboxes and the cursor of the next (null at the end). Today's server ignores
-     * limit and cursor and answers everything as one page.
+     * One page of sandboxes, newest first (at most limit, default and most 500), and the cursor of the next
+     * (null at the end). {@link #list()} is this first page only; {@link #listAll()} follows every page.
      */
     public CloudSandboxPage listPage(CloudOptions.List options) {
       CloudOptions.List o = options == null ? new CloudOptions.List() : options;
