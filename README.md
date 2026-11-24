@@ -240,7 +240,9 @@ git. Use `template("python")` (or another key from `cloud.templates()`) for Pyth
   `box.execStream(List.of("make", "test"), null, null, 3600, System.out::print, System.err::print)`
   (timeoutS up to a day; the result is a `CloudExecResult`). Or start them in the background and poll:
   `box.execBackground(List.of("make", "test"), null, null, 3600)`, then `box.waitBackground(id, ...)`.
-- A request body (command and env) is at most **64 KiB** (413 `too_large`); a file is at most **8 MiB**.
+- A request body (command and env) is at most **64 KiB** (413 `too_large`). One file request is at most
+  **100 MB** through the API: `box.files().uploadFile(path, localPath)` sends a bigger file in parts and
+  `downloadTo(path, localPath)` streams one to disk; `readRange`, `writeAt` and `append` work on parts of a file.
 
 ### RL training and fan-out
 
