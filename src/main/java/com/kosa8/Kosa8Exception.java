@@ -253,6 +253,12 @@ public class Kosa8Exception extends RuntimeException {
    */
   public static class ExecTimeoutException extends ApiException {
     public ExecTimeoutException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+
+    /** What the command printed to stdout before it was stopped ("" when the answer carried none). */
+    public String stdout() { String s = bodyString(body(), "stdout"); return s == null ? "" : s; }
+
+    /** What the command printed to stderr before it was stopped ("" when the answer carried none). */
+    public String stderr() { String s = bodyString(body(), "stderr"); return s == null ? "" : s; }
   }
 
   /** 409 */

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `CloudSandbox.execStream(cmd, image, env, timeoutS, onStdout, onStderr)`: a streamed exec (`stream: true`),
+  as Python's `exec_stream` and TypeScript's `execStream`. Output reaches the callbacks as UTF-8 text while
+  the command prints (heartbeat frames skipped, characters never split across frames); not held to 90 s,
+  timeoutS up to a day. A stop at timeoutS throws `ExecTimeoutException`, any other break `StreamException`,
+  both with the output so far. Not retried once sent, except after a 429.
+- `execBackground(cmd, image, env, timeoutS)`: the host ends a background command after timeoutS.
+- `ExecTimeoutException.stdout()` / `stderr()`: the output the command printed before it was stopped.
 - Every `Kosa8Exception.ApiException` reads kosa8 Cloud's error contract: `agentMessage()`, `upgradeUrl()`,
   `requestUrl()`, `limitName()`, `limit()`, `used()`, `plan()`, `nextPlan()`, `feature()`, `packUrl()` and
   `options()`. A 429 `quota_exceeded` (`RateLimitException`) now gives its `agent_message` and `request_url`,

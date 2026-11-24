@@ -130,10 +130,22 @@ public final class CloudSandbox {
    * {@link #backgroundExec(String)} or {@link #waitBackground(String, java.time.Duration, java.time.Duration)}.
    */
   public CloudBackgroundExec execBackground(List<String> cmd, String image, Map<String, String> env) {
+    return execBackground(cmd, image, env, null);
+  }
+
+  /**
+   * As {@link #execBackground(List, String, Map)}; timeoutS (1 s to a day, null for none) has the host end it
+   * then, and {@link #backgroundExec} reports timed_out.
+   */
+  public CloudBackgroundExec execBackground(List<String> cmd, String image, Map<String, String> env, Integer timeoutS) {
     if (cmd == null || cmd.isEmpty()) throw new IllegalArgumentException("execBackground needs a command");
+    if (timeoutS != null && (timeoutS < 1 || timeoutS > Kosa8Cloud.STREAM_LIMIT_S)) {
+      throw new IllegalArgumentException("timeoutS must be 1 to " + Kosa8Cloud.STREAM_LIMIT_S + " seconds, not " + timeoutS);
+    }
     Map<String, Object> b = new LinkedHashMap<>();
     b.put("cmd", List.copyOf(cmd));
     b.put("background", true);
+    if (timeoutS != null) b.put("timeout_s", timeoutS);
     if (image != null) b.put("image", image);
     if (env != null && !env.isEmpty()) b.put("env", CloudOptions.envList(env));
     return CloudBackgroundExec.of(Kosa8Cloud.obj(Kosa8Cloud.obj(cloud.request("POST", p("/exec"), b)).get("exec")));
@@ -339,6 +351,108 @@ public final class CloudSandbox {
     String fc = r.get("failure_class") instanceof String f ? f : dflt.failureClass();
     boolean rt = r.get("retryable") instanceof Boolean x ? x : dflt.retryable();
     return new CloudExecResult(exit, str(r.get("stdout")), str(r.get("stderr")), woke, fc, rt);
+  }
+
+  /** A streamed exec through {@code sh -c}, printing nothing as it goes. See {@link #execStream(List, String, Map, Integer, java.util.function.Consumer, java.util.function.Consumer)}. */
+  public CloudExecResult execStream(String cmd, java.util.function.Consumer<String> onStdout, java.util.function.Consumer<String> onStderr) {
+    return execStream(List.of("sh", "-c", cmd), null, null, null, onStdout, onStderr);
+  }
+
+  /**
+   * Run a command as a streamed exec: onStdout and onStderr (either may be null) get its output as it prints,
+   * as UTF-8 text, and the result is that of {@link #exec}. Not held to the 90 s of a buffered exec;
+   * timeoutS (1 s to a day, null for none) stops it in the sandbox, thrown as
+   * {@link Kosa8Exception.ExecTimeoutException} whose stdout() and stderr() hold the output so far. A refusal
+   * (bad request, quota) throws before any output; any other failure mid-stream throws
+   * {@link Kosa8Exception.StreamException} with the output so far. Not retried once sent (it has no
+   * Idempotency-Key), except when kosa8 Cloud refused it before it ran (429).
+   */
+  public CloudExecResult execStream(List<String> cmd, String image, Map<String, String> env, Integer timeoutS,
+      java.util.function.Consumer<String> onStdout, java.util.function.Consumer<String> onStderr) {
+    if (cmd == null || cmd.isEmpty()) throw new IllegalArgumentException("execStream needs a command");
+    if (timeoutS != null && (timeoutS < 1 || timeoutS > Kosa8Cloud.STREAM_LIMIT_S)) {
+      throw new IllegalArgumentException("timeoutS must be 1 to " + Kosa8Cloud.STREAM_LIMIT_S + " seconds, not " + timeoutS);
+    }
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("cmd", List.copyOf(cmd));
+    b.put("stream", true);
+    if (image != null) b.put("image", image);
+    if (timeoutS != null) b.put("timeout_s", timeoutS);
+    if (env != null && !env.isEmpty()) b.put("env", CloudOptions.envList(env));
+    Utf8Sink out = new Utf8Sink(onStdout);
+    Utf8Sink err = new Utf8Sink(onStderr);
+    java.util.concurrent.atomic.AtomicReference<Map<String, Object>> done = new java.util.concurrent.atomic.AtomicReference<>();
+    String path = p("/exec");
+    cloud.streamNdjson("POST", path, b, f -> {
+      if (done.get() != null) return;
+      if (Boolean.TRUE.equals(f.get("done"))) {
+        done.set(f);
+        return;
+      }
+      if (!(f.get("data") instanceof String d) || d.isEmpty()) return; // heartbeat: an empty frame every 15 s
+      byte[] bytes;
+      try {
+        bytes = java.util.Base64.getDecoder().decode(d);
+      } catch (IllegalArgumentException e) {
+        throw new Kosa8Exception.StreamException("bad frame from " + path + ": data is not base64", out.text(), err.text(), null);
+      }
+      ("stderr".equals(f.get("stream")) ? err : out).write(bytes);
+    });
+    out.flush();
+    err.flush();
+    Map<String, Object> f = done.get();
+    if (f == null) {
+      throw new Kosa8Exception.StreamException("the stream from kosa8 Cloud ended before the command did", out.text(), err.text(), null);
+    }
+    if (f.get("error") instanceof String e && !e.isEmpty()) {
+      if ("exec_timeout".equals(f.get("code"))) {
+        Map<String, Object> body = new LinkedHashMap<>(f);
+        body.put("stdout", out.text());
+        body.put("stderr", err.text());
+        throw new Kosa8Exception.ExecTimeoutException(e, 0, e, null, "POST", path, body).withCode("exec_timeout");
+      }
+      throw new Kosa8Exception.StreamException(e, out.text(), err.text(), e);
+    }
+    Integer exit = f.get("exit") instanceof Number n ? n.intValue() : null;
+    FailureClass dflt = FailureClass.ofExit(exit);
+    String fc = f.get("failure_class") instanceof String x ? x : dflt.failureClass();
+    boolean rt = f.get("retryable") instanceof Boolean x ? x : dflt.retryable();
+    return new CloudExecResult(exit, out.text(), err.text(), l(f.get("woke_ms")), fc, rt);
+  }
+
+  /** Bytes of one stream, kept whole and handed on as UTF-8 text without splitting a character. */
+  private static final class Utf8Sink {
+    private final java.io.ByteArrayOutputStream all = new java.io.ByteArrayOutputStream();
+    private final java.util.function.Consumer<String> fn;
+    private final java.nio.charset.CharsetDecoder dec = java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+        .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE);
+    private java.nio.ByteBuffer pending = java.nio.ByteBuffer.allocate(0);
+
+    Utf8Sink(java.util.function.Consumer<String> fn) { this.fn = fn; }
+
+    void write(byte[] b) {
+      all.write(b, 0, b.length);
+      if (fn == null) return;
+      java.nio.ByteBuffer in = java.nio.ByteBuffer.allocate(pending.remaining() + b.length);
+      in.put(pending).put(b).flip();
+      java.nio.CharBuffer cb = java.nio.CharBuffer.allocate(in.remaining() + 1);
+      dec.decode(in, cb, false);
+      pending = in.slice();
+      cb.flip();
+      if (cb.hasRemaining()) fn.accept(cb.toString());
+    }
+
+    void flush() {
+      if (fn == null) return;
+      java.nio.CharBuffer cb = java.nio.CharBuffer.allocate(pending.remaining() * 2 + 2);
+      dec.decode(pending, cb, true);
+      dec.flush(cb);
+      pending = java.nio.ByteBuffer.allocate(0);
+      cb.flip();
+      if (cb.hasRemaining()) fn.accept(cb.toString());
+    }
+
+    String text() { return all.toString(java.nio.charset.StandardCharsets.UTF_8); }
   }
 
   private static String str(Object o) { return o instanceof String s ? s : ""; }
