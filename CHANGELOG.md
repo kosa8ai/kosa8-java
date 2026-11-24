@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Every `Kosa8Exception.ApiException` reads kosa8 Cloud's error contract: `agentMessage()`, `upgradeUrl()`,
+  `requestUrl()`, `limitName()`, `limit()`, `used()`, `plan()`, `nextPlan()`, `feature()`, `packUrl()` and
+  `options()`. A 429 `quota_exceeded` (`RateLimitException`) now gives its `agent_message` and `request_url`,
+  which only a 402 did before, and its message ends with `ask for more: <request_url>`.
+- TLS to a remote worker (`https://` in `KOSA8_HOST` or a saved worker) checks that the certificate names the
+  host and sends SNI; before, any valid certificate for any name was accepted.
 - Retries of creates, batches, forks, grades, job submits and rollout flushes use a new SDK-made
   `Idempotency-Key` after a 5xx (502 `host_failed`, 503 `no_capacity` / `host_restarting` /
   `host_unavailable`, 504), so each retry of a server-side failure is a new attempt. The key is still kept
