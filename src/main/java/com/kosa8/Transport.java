@@ -16,6 +16,7 @@ import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -24,6 +25,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
 /**
@@ -139,7 +143,7 @@ final class Transport {
         in = Channels.newInputStream(ch);
         out = Channels.newOutputStream(ch);
       } else {
-        Socket s = endpoint.scheme().equals("https") ? SSLSocketFactory.getDefault().createSocket() : new Socket();
+        Socket s = endpoint.scheme().equals("https") ? tlsSocket(endpoint.host()) : new Socket();
         conn = s;
         s.connect(new InetSocketAddress(endpoint.host(), endpoint.port()), 30_000);
         in = s.getInputStream();
@@ -188,6 +192,26 @@ final class Transport {
       throw new Kosa8Exception.ConnectionException("kosa8 daemon unreachable at " + endpoint.target() + ": "
           + e.getClass().getSimpleName() + ": " + msg + hint, r.method, r.path, e);
     }
+  }
+
+  /**
+   * An unconnected TLS socket that checks the server's certificate names host (an SSLSocket from the
+   * factory checks only the chain, so any valid certificate for any name would pass) and sends SNI.
+   */
+  static SSLSocket tlsSocket(String host) throws IOException {
+    SSLSocket s = (SSLSocket) SSLSocketFactory.getDefault().createSocket();
+    SSLParameters p = s.getSSLParameters();
+    p.setEndpointIdentificationAlgorithm("HTTPS");
+    String h = host.startsWith("[") && host.endsWith("]") ? host.substring(1, host.length() - 1) : host;
+    if (!h.contains(":") && !h.matches("[0-9.]+")) {
+      try {
+        p.setServerNames(List.of(new SNIHostName(h)));
+      } catch (IllegalArgumentException ignored) {
+        // not a name SNI can carry; the name check still applies
+      }
+    }
+    s.setSSLParameters(p);
+    return s;
   }
 
   Kosa8Exception timeout(Request r) {

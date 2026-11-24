@@ -398,6 +398,24 @@ public class ClientTest {
     }
   }
 
+  public void testTlsToAWorkerChecksTheHostName() throws Exception {
+    // A bare SSLSocket checks only the certificate chain: without HTTPS endpoint identification any
+    // valid certificate for any name is accepted, and the worker token goes to whoever holds it.
+    javax.net.ssl.SSLSocket s = Transport.tlsSocket("worker.example.com");
+    try {
+      eq("HTTPS", s.getSSLParameters().getEndpointIdentificationAlgorithm(), "endpoint identification");
+      eq(List.of(new javax.net.ssl.SNIHostName("worker.example.com")), s.getSSLParameters().getServerNames(), "SNI");
+    } finally {
+      s.close();
+    }
+    javax.net.ssl.SSLSocket ip = Transport.tlsSocket("10.0.0.5");
+    try {
+      eq("HTTPS", ip.getSSLParameters().getEndpointIdentificationAlgorithm(), "endpoint identification for an IP");
+    } finally {
+      ip.close();
+    }
+  }
+
   public static void main(String[] args) throws Exception {
     int pass = 0, skipped = 0;
     List<String> failed = new ArrayList<>();
