@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-11-24
 
 - GitHub repos: `CloudOptions.Create.repo("owner/name@ref")` or `repo(new CloudOptions.RepoSpec(name).ref(..).path(..).depth(..))`
   starts a sandbox from a repo of the org's connected GitHub (`CloudSandbox.repoInfo()` says whether the clone is done);
