@@ -226,6 +226,15 @@ public class Kosa8Exception extends RuntimeException {
     public PolicyException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
   }
 
+  /**
+   * 403 {@code human_required}: only a person may do this (approve or reject a bot's action, enable a bot, resume
+   * every bot). An agent never approves its own action: a person approves in the web app, the desktop app, the CLI or
+   * Slack. A capability token, MCP or an org key bound to no member is always refused; there is no way around it here.
+   */
+  public static class HumanApprovalRequiredException extends PolicyException {
+    public HumanApprovalRequiredException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
   /** 403 that a signed approval would lift; {@link #approval()} is the daemon's refusal. */
   public static class ApprovalRequiredException extends PolicyException {
     private final Map<String, Object> approval;
@@ -393,7 +402,7 @@ public class Kosa8Exception extends RuntimeException {
     };
   }
 
-  /** The GitHub error for kosa8 Cloud's code, or null when the code is not one of them. */
+  /** The typed error for kosa8 Cloud's code (GitHub, human_required), or null when the code is not one of them. */
   static Kosa8Exception githubError(int status, String code, Object msgBody, Object body, String method, String path) {
     if (code == null) return null;
     String msg = msgBody instanceof Map<?, ?> m && m.get("error") instanceof String s && !s.isEmpty() ? s : null;
@@ -403,6 +412,7 @@ public class Kosa8Exception extends RuntimeException {
     if (status == 409 && code.equals("no_changes")) return new NoChangesException(text, status, msg, null, method, path, body);
     if (status == 404 && code.equals("repo_not_found")) return new RepoNotFoundException(text, status, msg, null, method, path, body);
     if (code.equals("github_unavailable")) return new GitHubUnavailableException(text, status, msg, null, method, path, body);
+    if (status == 403 && code.equals("human_required")) return new HumanApprovalRequiredException(text, status, msg, null, method, path, body);
     return null;
   }
 

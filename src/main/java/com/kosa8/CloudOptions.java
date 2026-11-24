@@ -882,6 +882,56 @@ public final class CloudOptions {
     }
   }
 
+  /**
+   * {@link CloudBots#create(Bot)}, {@link CloudBots#plan(Bot)} and {@link CloudBots#update(String, Bot)}:
+   * {@code new CloudOptions.Bot().template("spend-guard").name("Spend guard")}. Create and plan take exactly one of
+   * template and spec; sponsor (a member email) defaults to the person whose key this is.
+   */
+  public static final class Bot {
+    String template;
+    Map<String, Object> spec;
+    String name;
+    String sponsor;
+    Double budgetUsd;
+    Map<String, Object> scope;
+    Map<String, Object> notify;
+    boolean replay;
+
+    /** A template id, e.g. spend-guard. */
+    public Bot template(String v) { template = v; return this; }
+    /** A spec: {triggers, actions, scope, budget_usd, notify, ...}. */
+    public Bot spec(Map<String, Object> v) { spec = v; return this; }
+    public Bot name(String v) { name = v; return this; }
+    public Bot sponsor(String v) { sponsor = v; return this; }
+    public Bot budgetUsd(double v) { budgetUsd = v; return this; }
+    /** {labels: {env: dev}}: the sandboxes the bot sees. */
+    public Bot scope(Map<String, Object> v) { scope = v; return this; }
+    /** {mode: digest}. */
+    public Bot notify(Map<String, Object> v) { notify = v; return this; }
+    /** plan only: also replay the last 7 days of real events. */
+    public Bot replay(boolean v) { replay = v; return this; }
+
+    void checkOneOf(String what) {
+      if ((template == null) == (spec == null)) throw new IllegalArgumentException(what + " needs exactly one of template and spec");
+    }
+
+    Map<String, Object> body(boolean withReplay) {
+      Map<String, Object> b = new LinkedHashMap<>();
+      if (template != null) b.put("template", template);
+      if (spec != null) b.put("spec", spec);
+      if (name != null) b.put("name", name);
+      if (withReplay) {
+        if (replay) b.put("replay", true);
+        return b;
+      }
+      if (sponsor != null) b.put("sponsor", sponsor);
+      if (budgetUsd != null) b.put("budget_usd", budgetUsd);
+      if (scope != null) b.put("scope", scope);
+      if (notify != null) b.put("notify", notify);
+      return b;
+    }
+  }
+
   static void checkSleepAfter(Integer s) {
     if (s != null && (s < 0 || s > MAX_SLEEP_AFTER_S)) {
       throw new IllegalArgumentException("sleepAfterS must be from 0 (never) to " + MAX_SLEEP_AFTER_S + ", not " + s);
