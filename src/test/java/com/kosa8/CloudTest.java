@@ -579,6 +579,93 @@ public final class CloudTest extends ClientTest {
     }
   }
 
+  static byte[] ndjson(Map<?, ?>... frames) {
+    StringBuilder b = new StringBuilder();
+    for (Map<?, ?> f : frames) b.append(Json.write(f)).append('\n');
+    return b.toString().getBytes(StandardCharsets.UTF_8);
+  }
+
+  static String b64(String s) { return java.util.Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8)); }
+
+  static String b64(byte[] b) { return java.util.Base64.getEncoder().encodeToString(b); }
+
+  public void testExecStream() throws Exception {
+    byte[] e9 = "é".getBytes(StandardCharsets.UTF_8); // two bytes, split across frames
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(200, ndjson(
+            Map.of("stream", "stdout", "data", b64("hi ")),
+            Map.of("stream", "stdout", "data", "", "heartbeat", true),
+            Map.of("stream", "stdout", "data", b64(new byte[] {e9[0]})),
+            Map.of("stream", "stdout", "data", b64(new byte[] {e9[1], '\n'})),
+            Map.of("stream", "stderr", "data", b64("warn\n")),
+            Map.of("done", true, "exit", 3))),
+        new Answer(200, ndjson(
+            Map.of("stream", "stdout", "data", b64("so far")),
+            Map.of("done", true, "error", "the command ran past 5 s", "code", "exec_timeout"))),
+        new Answer(200, ndjson(Map.of("stream", "stdout", "data", b64("partial")))),
+        new Answer(200, ndjson(Map.of("done", true, "error", "host lost")))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      Kosa8Cloud cloud = stub.cloud();
+      CloudSandbox box = new CloudSandbox(cloud, sbx("running"));
+      StringBuilder out = new StringBuilder();
+      StringBuilder err = new StringBuilder();
+      CloudExecResult r = box.execStream(List.of("make", "test"), null, Map.of("A", "1"), 3600, out::append, err::append);
+      eq(3, r.exitCode(), "exit");
+      eq("hi é\n", r.stdout(), "stdout");
+      eq("hi é\n", out.toString(), "callback text, no split character");
+      eq("warn\n", err.toString(), "stderr callback");
+      eq("exit_nonzero", r.failureClass(), "failure class");
+      Map<?, ?> body = (Map<?, ?>) stub.seen.get(0).body();
+      eq(true, body.get("stream"), "stream: true");
+      eq(3600, ((Number) body.get("timeout_s")).intValue(), "a streamed timeout may pass 90 s");
+      eq(List.of("A=1"), body.get("env"), "env");
+      eq("application/x-ndjson", stub.seen.get(0).headers().get("accept"), "accept");
+      var t = raises(Kosa8Exception.ExecTimeoutException.class, () -> box.execStream("sleep 9", null, null));
+      eq("exec_timeout", t.code(), "timeout code");
+      eq("so far", t.stdout(), "output so far");
+      var b = raises(Kosa8Exception.StreamException.class, () -> box.execStream("x", null, null));
+      eq("partial", b.stdout(), "a stream with no done frame");
+      var h = raises(Kosa8Exception.StreamException.class, () -> box.execStream("x", null, null));
+      check(h.getMessage().contains("host lost"), h.getMessage());
+      raises(IllegalArgumentException.class, () -> box.execStream(List.of("x"), null, null, 86401, null, null));
+    }
+  }
+
+  public void testExecStreamRefusedBeforeAnyOutput() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(500, Map.of("error", "internal", "message", "boom", "retryable", true)),
+        new Answer(429, Map.of("error", "rate_limited", "message", "slow down"), Map.of("Retry-After", "1")),
+        new Answer(200, ndjson(Map.of("done", true, "exit", 0)))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      List<Duration> sleeps = new ArrayList<>();
+      Kosa8Cloud cloud = stub.cloud(sleeps);
+      CloudSandbox box = new CloudSandbox(cloud, sbx("running"));
+      // A 500 may have started the command: a streamed exec has no Idempotency-Key, so it is not sent again.
+      raises(Kosa8Exception.ApiException.class, () -> box.execStream("x", null, null));
+      eq(1, stub.seen.size(), "a 5xx is not retried");
+      // A 429 was refused before anything ran: retried after Retry-After.
+      eq(0, box.execStream("x", null, null).exitCode(), "retried after 429");
+      eq(3, stub.seen.size(), "one retry");
+      check(sleeps.get(0).toMillis() >= 1000, "waited Retry-After");
+    }
+  }
+
+  public void testBufferedExecTimeoutKeepsOutputAndBackgroundTimeout() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(504, Map.of("error", "exec_timeout", "message", "the command ran past timeout_s 5", "stdout", "so far",
+            "stderr", "e", "limit_s", 5)),
+        new Answer(202, Map.of("exec", Map.of("id", "bg_1", "state", "running")))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      Kosa8Cloud cloud = stub.cloud();
+      CloudSandbox box = new CloudSandbox(cloud, sbx("running"));
+      var t = raises(Kosa8Exception.ExecTimeoutException.class, () -> box.exec("sleep 9", null, null, 5));
+      eq("so far", t.stdout(), "504 stdout so far");
+      eq("e", t.stderr(), "504 stderr so far");
+      eq("bg_1", box.execBackground(List.of("sleep", "999"), null, null, 600).id(), "background id");
+      eq(600, ((Number) ((Map<?, ?>) stub.seen.get(1).body()).get("timeout_s")).intValue(), "background timeout_s");
+    }
+  }
+
   public void testQuotaAndPlanLimitFieldsOnEveryApiError() throws Exception {
     List<Answer> answers = new ArrayList<>(List.of(
         new Answer(429, Map.of("error", "quota_exceeded", "message", "the running limit is reached", "retryable", false,

@@ -348,6 +348,9 @@ public final class Kosa8Cloud {
   /** How long a buffered exec may run before kosa8 Cloud stops it (504 exec_timeout), in seconds. */
   public static final int EXEC_LIMIT_S = 90;
 
+  /** The longest timeout_s a streamed or background exec takes, in seconds (a day). */
+  public static final int STREAM_LIMIT_S = 86400;
+
   static final String EXEC_HINT = "a buffered exec is stopped after " + EXEC_LIMIT_S
       + " s; run long work in the background, writing to /workspace, and poll it";
 
@@ -477,6 +480,73 @@ public final class Kosa8Cloud {
           h.firstValue("X-Request-Id").or(() -> h.firstValue("cf-ray")).orElse(null));
     }
     return parsed;
+  }
+
+  /**
+   * Opens a streamed call (NDJSON answer) and passes each line to fn as a JSON object. An error answer throws
+   * before any line; it is retried only when kosa8 Cloud refused it before anything ran (429, 503 database_busy),
+   * since a streamed exec has no Idempotency-Key. A break mid-stream throws {@link Kosa8Exception.StreamException}.
+   */
+  void streamNdjson(String method, String path, Object body, java.util.function.Consumer<Map<String, Object>> fn) {
+    java.io.InputStream in;
+    for (int attempt = 1; ; attempt++) {
+      try {
+        in = openStream(method, path, body);
+        break;
+      } catch (Kosa8Exception e) {
+        if (!retry.shouldRetry(e, attempt) || !rejectedBeforeRunning(e)) throw e;
+        sleeper.accept(retry.delay(e, attempt));
+      }
+    }
+    try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(in, StandardCharsets.UTF_8))) {
+      String line;
+      while ((line = r.readLine()) != null) {
+        if (line.isBlank()) continue;
+        Object v;
+        try {
+          v = Json.parse(line);
+        } catch (RuntimeException e) {
+          throw new Kosa8Exception.StreamException("bad frame from " + path + ": " + e.getMessage(), "", "", null);
+        }
+        if (v instanceof Map<?, ?>) fn.accept(obj(v));
+      }
+    } catch (IOException e) {
+      throw new Kosa8Exception.StreamException("the stream from kosa8 Cloud broke: " + e.getMessage(), "", "", null);
+    }
+  }
+
+  private java.io.InputStream openStream(String method, String path, Object body) {
+    HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(timeout)
+        .header("Authorization", "Bearer " + key).header("User-Agent", "kosa8-java/" + Kosa8Client.VERSION)
+        .header("Accept", "application/x-ndjson").header("Content-Type", "application/json")
+        .method(method, HttpRequest.BodyPublishers.ofString(Json.write(body), StandardCharsets.UTF_8));
+    HttpResponse<java.io.InputStream> resp;
+    try {
+      resp = http.send(rb.build(), HttpResponse.BodyHandlers.ofInputStream());
+    } catch (HttpTimeoutException e) {
+      throw new Kosa8Exception.TimeoutException("kosa8 Cloud did not answer within " + timeout.toMillis() / 1000.0 + " s", method, path);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new Kosa8Exception.ConnectionException("interrupted talking to kosa8 Cloud", method, path, e);
+    } catch (IOException e) {
+      throw new Kosa8Exception.ConnectionException("could not reach kosa8 Cloud at " + baseUrl + ": " + e.getMessage(), method, path, e);
+    }
+    if (resp.statusCode() < 400) return resp.body();
+    String text;
+    try (java.io.InputStream in = resp.body()) {
+      text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      text = "";
+    }
+    Object parsed;
+    try {
+      parsed = text.isEmpty() ? null : Json.parse(text);
+    } catch (RuntimeException e) {
+      parsed = text;
+    }
+    var h = resp.headers();
+    throw cloudError(resp.statusCode(), parsed, method, path, h.firstValue("Retry-After").orElse(null),
+        h.firstValue("X-Request-Id").or(() -> h.firstValue("cf-ray")).orElse(null));
   }
 
   static boolean isExecPath(String path) {

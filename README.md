@@ -236,9 +236,10 @@ git. Use `template("python")` (or another key from `cloud.templates()`) for Pyth
   persistent-sandbox limit.
 - **A buffered exec runs at most 90 s** and throws `Kosa8Exception.ExecTimeoutException`.
   `box.exec(cmd, null, null, 30)` (image, env, timeoutS) stops a command sooner, in the sandbox.
-  Run long work in the background and poll it:
-  `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' > /dev/null 2>&1 &")`,
-  then read `/workspace/test.exit` later.
+  For longer commands stream them, which is not held to 90 s and prints as it goes:
+  `box.execStream(List.of("make", "test"), null, null, 3600, System.out::print, System.err::print)`
+  (timeoutS up to a day; the result is a `CloudExecResult`). Or start them in the background and poll:
+  `box.execBackground(List.of("make", "test"), null, null, 3600)`, then `box.waitBackground(id, ...)`.
 - A request body (command and env) is at most **64 KiB** (413 `too_large`); a file is at most **8 MiB**.
 
 ### RL training and fan-out
