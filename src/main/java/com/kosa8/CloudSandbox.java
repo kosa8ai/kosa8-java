@@ -295,6 +295,46 @@ public final class CloudSandbox {
   @Override
   public String toString() { return "CloudSandbox(id=" + id() + ", state=" + state() + ")"; }
 
+  /**
+   * The GitHub repo it was started from as last described ({full_name, ref, sha, path, status: cloned, pending or
+   * failed, error}), or null when it was not started from one.
+   */
+  public Map<String, Object> repoInfo() { return info.get("repo") instanceof Map<?, ?> ? Kosa8Cloud.obj(info.get("repo")) : null; }
+
+  /**
+   * Its repo asked of the server, with changes ({files_changed, insertions, deletions}); a pending clone is tried
+   * again. Updates {@link #repoInfo()}.
+   */
+  public Map<String, Object> repo() {
+    Map<String, Object> r = Kosa8Cloud.obj(cloud.request("GET", p("/repo"), null));
+    Map<String, Object> repo = r.get("repo") instanceof Map<?, ?> ? Kosa8Cloud.obj(r.get("repo")) : r;
+    Map<String, Object> next = new LinkedHashMap<>(info);
+    next.put("repo", repo);
+    info = next;
+    return repo;
+  }
+
+  /**
+   * Commit everything that changed in its repo and push it to a branch: {branch, sha, compare_url,
+   * files_changed}. kosa8 pushes with a token for this one repo that never enters the sandbox. Nothing changed:
+   * {@link Kosa8Exception.NoChangesException}.
+   */
+  public Map<String, Object> push(CloudOptions.Push options) {
+    return Kosa8Cloud.obj(cloud.request("POST", p("/github/push"), (options == null ? new CloudOptions.Push() : options).body()));
+  }
+
+  /** {@link #push(CloudOptions.Push)} with the server's defaults. */
+  public Map<String, Object> push() { return push(null); }
+
+  /** Push (as {@link #push(CloudOptions.Push)}) and open a pull request: {number, url, branch, sha}. */
+  public Map<String, Object> pullRequest(CloudOptions.PullRequest options) {
+    return Kosa8Cloud.obj(cloud.request("POST", p("/github/pull-request"),
+        (options == null ? new CloudOptions.PullRequest() : options).toBody()));
+  }
+
+  /** A draft pull request with the server's defaults. */
+  public Map<String, Object> pullRequest() { return pullRequest(null); }
+
   String p(String suffix) { return "/v1/sandboxes/" + Transport.enc(id()) + suffix; }
 
   Kosa8Cloud cloud() { return cloud; }
