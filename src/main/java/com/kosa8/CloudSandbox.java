@@ -350,7 +350,9 @@ public final class CloudSandbox {
     FailureClass dflt = FailureClass.ofExit(exit);
     String fc = r.get("failure_class") instanceof String f ? f : dflt.failureClass();
     boolean rt = r.get("retryable") instanceof Boolean x ? x : dflt.retryable();
-    return new CloudExecResult(exit, str(r.get("stdout")), str(r.get("stderr")), woke, fc, rt);
+    return new CloudExecResult(exit, str(r.get("stdout")), str(r.get("stderr")), woke, fc, rt,
+        Boolean.TRUE.equals(r.get("stdout_truncated")), Boolean.TRUE.equals(r.get("stderr_truncated")),
+        l(r.get("stdout_bytes")), l(r.get("stderr_bytes")));
   }
 
   /** A streamed exec through {@code sh -c}, printing nothing as it goes. See {@link #execStream(List, String, Map, Integer, java.util.function.Consumer, java.util.function.Consumer)}. */

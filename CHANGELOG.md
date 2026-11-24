@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `CloudExecResult` gains `stdoutTruncated()`, `stderrTruncated()`, `stdoutBytes()` and `stderrBytes()`: a
+  buffered exec keeps the first and last 1 MiB of each stream, and now says when it dropped the middle.
+- `CloudOptions.Create.kvm(boolean)` (preview, /dev/kvm). `CloudOptions.List.limit` checks 1 to 500, the
+  server's range; the `listPage` docs say the server pages (they said it did not), and `list()` is the first page.
 - Files: `readRange(path, start, end)` (HTTP Range), `writeAt(path, data, offset)`, `append(path, data)`,
   `uploadFile(path, localPath)` (64 MiB parts at their offsets, so files over the API's 100 MB request limit
   work) and `downloadTo(path, localPath)` (streamed to disk, never held in memory). An append is never retried
