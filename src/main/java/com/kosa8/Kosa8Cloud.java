@@ -63,6 +63,8 @@ public final class Kosa8Cloud {
   private final CloudAudit audit = new CloudAudit(this);
   private final CloudRl rl = new CloudRl(this);
   private final CloudGitHub github = new CloudGitHub(this);
+  private final CloudBots bots = new CloudBots(this);
+  private final CloudApprovals approvals = new CloudApprovals(this);
 
   private Kosa8Cloud(String key, String baseUrl, Duration timeout, RetryPolicy retry, java.util.function.Consumer<Duration> sleeper) {
     this.key = key;
@@ -196,6 +198,12 @@ public final class Kosa8Cloud {
 
   /** The org's connected GitHub: status, repos, branches. */
   public CloudGitHub github() { return github; }
+
+  /** Autopilot bots: templates, plans, drafts, dry runs, runs, pause-all. */
+  public CloudBots bots() { return bots; }
+
+  /** Bot actions waiting for a person's decision (approve or reject only with a person's key). */
+  public CloudApprovals approvals() { return approvals; }
 
   /**
    * A preview's custom domains by its preview id (from {@link CloudPreview}); the same as

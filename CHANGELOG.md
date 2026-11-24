@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Autopilot bots: `cloud.bots()` with `list()` (bots, `paused_all`, `pending_approvals`), `templates()`, `template(id)`,
+  `plan(CloudOptions.Bot)` (template or spec, optional 7-day `replay`), `compile(text)` (at most 500 characters, checked
+  before sending), `create(CloudOptions.Bot)` (a draft; exactly one of template and spec), `get`, `update`, `delete`,
+  `enable`, `disable`, `run(id)` (a dry run; `run(id, false)` for real), `runs`, `getRun`, `cancelRun`, `undoStep`,
+  `pauseAll()` and `resumeAll()`.
+- `cloud.approvals()`: `list(state, limit)`, `get`, `approve(id[, reason, editedArgs])`, `reject(id, reason)`. Deciding
+  works only with a person's key: an agent never approves its own action.
+- `HumanApprovalRequiredException` (a `PolicyException`) for 403 `human_required` from approve, reject, enable and
+  resumeAll with a capability token, MCP or an org key bound to no member.
+
 ## 0.8.0 - 2026-11-24
 
 - GitHub repos: `CloudOptions.Create.repo("owner/name@ref")` or `repo(new CloudOptions.RepoSpec(name).ref(..).path(..).depth(..))`

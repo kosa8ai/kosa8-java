@@ -190,6 +190,22 @@ sandbox. Errors: `GitHubNotConnectedException` (`connectUrl()`), `GitHubPermissi
 (`missingPermissions()`, `settingsUrl()`), `NoChangesException`, `RepoNotFoundException`,
 `GitHubUnavailableException`.
 
+### Autopilot bots
+
+Bots are small automations on the org's sandboxes (sleep idle boxes, guard spend, block a threat). They are saved as
+drafts, tried with a dry run, and only a person turns one on.
+
+```java
+Map<String, Object> plan = cloud.bots().plan(new CloudOptions.Bot().template("spend-guard").replay(true));
+Map<String, Object> bot = cloud.bots().create(new CloudOptions.Bot().template("spend-guard")); // a draft
+Map<String, Object> run = cloud.bots().run((String) bot.get("id")); // a dry run; changes nothing
+List<Map<String, Object>> pending = cloud.approvals().list();
+```
+
+An agent never approves its own action: `bots().enable`, `bots().resumeAll` and `approvals().approve` / `reject` need a
+person's key and otherwise throw `Kosa8Exception.HumanApprovalRequiredException`. A person approves in the web app, the
+desktop app, the CLI or Slack. `bots().pauseAll()` stops everything.
+
 ### Functions
 
 ```java
