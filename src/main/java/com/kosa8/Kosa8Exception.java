@@ -263,6 +263,18 @@ public class Kosa8Exception extends RuntimeException {
   }
 
   /**
+   * A plan limit answered with HTTP 429 (Starter's running limit, {@code starter_limit}): a
+   * {@link PaymentRequiredException} like every other plan limit. Pick a plan or stop a sandbox; retrying
+   * does not help. (Before 0.10 it was thrown as a {@link RateLimitException}.)
+   */
+  public static class PlanLimitException extends PaymentRequiredException {
+    public PlanLimitException(String m, int st, String dm, String rem, String me, String p, Object b) { super(m, st, dm, rem, me, p, b); }
+  }
+
+  /** Codes that mean "pick or pay for a plan", whatever the HTTP status. */
+  static final java.util.Set<String> PLAN_LIMIT_CODES = java.util.Set.of("starter_limit", "plan_limit", "plan_feature", "plan_required");
+
+  /**
    * 423 {@code org_frozen}: the organization is frozen in the Security Center. Nothing runs until an
    * owner or admin unfreezes it there.
    */

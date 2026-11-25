@@ -86,6 +86,7 @@ public final class Kosa8Cloud {
     private String baseUrl;
     private Duration timeout = Duration.ofSeconds(120);
     private Function<String, String> getenv = System::getenv;
+    private boolean getenvSet;
     private RetryPolicy retry = RetryPolicy.DEFAULT;
     private java.util.function.Consumer<Duration> sleeper = CloudSandbox::pause;
 
@@ -96,7 +97,7 @@ public final class Kosa8Cloud {
     /** Per request; default 120 s. */
     public Builder timeout(Duration v) { timeout = v; return this; }
     /** For tests. */
-    public Builder getenv(Function<String, String> v) { getenv = v; return this; }
+    public Builder getenv(Function<String, String> v) { getenv = v; getenvSet = true; return this; }
     /**
      * Retries for every request where trying again is safe (default {@link RetryPolicy#DEFAULT}, 3 tries with
      * backoff and jitter): reads, PUTs, deletes, heartbeats and drains on infra failures; the calls that make
@@ -113,8 +114,15 @@ public final class Kosa8Cloud {
     public Kosa8Cloud build() {
       String k = apiKey != null ? apiKey : getenv.apply("KOSA8_API_KEY");
       k = k == null ? "" : k.strip();
+      String savedUrl = null;
+      if (k.isEmpty() && apiKey == null) {
+        // Signed in with `kosa8 login`: the CLI keeps the key in ~/.kosa8/cloud.json.
+        String[] saved = savedLogin(getenv, getenvSet);
+        k = saved[0];
+        savedUrl = saved[1];
+      }
       if (k.isEmpty()) {
-        throw new Kosa8Exception("no kosa8 Cloud API key: set KOSA8_API_KEY or pass Kosa8Cloud.builder().apiKey(...); "
+        throw new Kosa8Exception("no kosa8 Cloud API key: run `kosa8 login`, set KOSA8_API_KEY or pass Kosa8Cloud.builder().apiKey(...); "
             + "make one at " + KEYS_URL + " (API keys)");
       }
       if (!k.startsWith(KEY_PREFIX) && !k.startsWith(TOKEN_PREFIX)) {
@@ -123,9 +131,38 @@ public final class Kosa8Cloud {
       }
       String u = baseUrl;
       if (u == null || u.isEmpty()) u = getenv.apply("KOSA8_CLOUD_URL");
+      if (u == null || u.isEmpty()) u = savedUrl;
       if (u == null || u.isEmpty()) u = DEFAULT_CLOUD_URL;
       if (timeout == null || timeout.isNegative() || timeout.isZero()) throw new Kosa8Exception("timeout must be positive");
       return new Kosa8Cloud(k, checkBase(u), timeout, retry, sleeper);
+    }
+  }
+
+  /**
+   * Where {@code kosa8 login} keeps the kosa8 Cloud key: {@code ~/.kosa8/cloud.json}. With a test getenv
+   * ({@code explicit}), its HOME decides (none: no file); otherwise the user's home.
+   */
+  static java.nio.file.Path credentialsPath(Function<String, String> getenv, boolean explicit) {
+    String home = getenv.apply("HOME");
+    if (home == null || home.isEmpty()) home = getenv.apply("USERPROFILE");
+    if ((home == null || home.isEmpty()) && !explicit) home = System.getProperty("user.home");
+    if (home == null || home.isEmpty()) return null;
+    return java.nio.file.Path.of(home, ".kosa8", "cloud.json");
+  }
+
+  /** {key, apiUrl} that {@code kosa8 login} saved, or {"", null}. */
+  static String[] savedLogin(Function<String, String> getenv, boolean explicit) {
+    try {
+      java.nio.file.Path p = credentialsPath(getenv, explicit);
+      if (p == null || !java.nio.file.Files.isRegularFile(p)) return new String[] {"", null};
+      Object o = Json.parse(java.nio.file.Files.readString(p));
+      if (!(o instanceof Map<?, ?> m)) return new String[] {"", null};
+      Object key = m.get("key") instanceof String ks ? ks : m.get("api_key");
+      String k = key instanceof String ks2 ? ks2.strip() : "";
+      String u = m.get("api_url") instanceof String us && !us.isBlank() ? us.strip() : null;
+      return new String[] {k, u};
+    } catch (Exception e) {
+      return new String[] {"", null};
     }
   }
 
@@ -694,6 +731,12 @@ public final class Kosa8Cloud {
           null, method, path, body).withCode(code != null ? code : "exec_timeout");
     }
     Kosa8Exception e = Kosa8Exception.githubError(status, code, msgBody, body, method, path);
+    if (e == null && code != null && Kosa8Exception.PLAN_LIMIT_CODES.contains(code)) {
+      String dm = msgBody instanceof Map<?, ?> pm && pm.get("error") instanceof String ps && !ps.isEmpty() ? ps : null;
+      String text = dm != null ? dm : "request failed with HTTP " + status;
+      e = status == 429 ? new Kosa8Exception.PlanLimitException(text, status, dm, null, method, path, body)
+          : new Kosa8Exception.PaymentRequiredException(text, status, dm, null, method, path, body);
+    }
     if (e == null) e = Kosa8Exception.fromResponse(status, msgBody, body, method, path);
     e.withCode(code);
     Duration ra = parseRetryAfter(retryAfter);
