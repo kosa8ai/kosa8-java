@@ -14,17 +14,17 @@ Maven:
 <dependency>
   <groupId>com.kosa8</groupId>
   <artifactId>kosa8</artifactId>
-  <version>0.8.0</version>
+  <version>0.9.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation "com.kosa8:kosa8:0.8.0"
+implementation "com.kosa8:kosa8:0.9.0"
 ```
 
-0.8.0 is the latest release on Maven Central
+0.9.0 is the latest release on Maven Central
 ([com.kosa8:kosa8](https://central.sonatype.com/artifact/com.kosa8/kosa8)); the CHANGELOG lists what each version added.
 
 ## kosa8 Cloud quickstart
