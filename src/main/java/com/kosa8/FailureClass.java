@@ -19,7 +19,7 @@ public record FailureClass(String failureClass, boolean retryable) {
       "host_lost", "host_removed", "insufficient_storage", "starting");
   private static final Set<String> RATE = Set.of("rate_limited", "slow_down", "too_soon");
   private static final Set<String> QUOTA = Set.of("quota_exceeded", "running_limit", "plan_required", "plan_limit", "plan_feature",
-      "payment_required", "payment_declined", "spending_cap_reached", "snapshot_limit", "org_frozen", "org_suspended", "too_many_runs");
+      "payment_required", "payment_declined", "payment_failed", "spend_cap", "starter_limit", "spending_cap_reached", "snapshot_limit", "org_frozen", "org_suspended", "too_many_runs");
 
   /** The server's failureOf: the class of an HTTP status and error code (code may be null). */
   public static FailureClass of(int status, String code) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `Kosa8Cloud.builder().build()` with no `apiKey` and no `KOSA8_API_KEY` uses the key `kosa8 login` keeps in `~/.kosa8/cloud.json` (and its `api_url` unless `baseUrl` or `KOSA8_CLOUD_URL` is set). The no-key error names `kosa8 login`.
+- A plan limit answered with HTTP 429 (`starter_limit`) throws the new `PlanLimitException`, a `PaymentRequiredException` like every other plan limit (it was a `RateLimitException`, so code catching payment errors missed it). `starter_limit`, `payment_failed` and `spend_cap` are quota codes: not retried.
+
 ## 0.9.0 - 2026-11-25
 
 - Autopilot bots: `cloud.bots()` with `list()` (bots, `paused_all`, `pending_approvals`), `templates()`, `template(id)`,

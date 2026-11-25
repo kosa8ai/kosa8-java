@@ -96,6 +96,33 @@ public final class CloudTest extends ClientTest {
     eq("http://[::1]:8787", Kosa8Cloud.builder().apiKey(KEY).baseUrl("http://[::1]:8787").getenv(x -> null).build().baseUrl(), "::1");
   }
 
+  public void testCloudUsesKosa8Login() throws Exception {
+    Path home = Files.createTempDirectory("kosa8-home");
+    Files.createDirectories(home.resolve(".kosa8"));
+    Files.writeString(home.resolve(".kosa8").resolve("cloud.json"),
+        "{\"key\":\"k8c_live_fromlogin\",\"api_url\":\"http://localhost:8787\",\"org_id\":\"org_1\"}");
+    Kosa8Cloud c = Kosa8Cloud.builder().getenv(Map.of("HOME", home.toString())::get).build();
+    eq("http://localhost:8787", c.baseUrl(), "saved address");
+    c = Kosa8Cloud.builder().getenv(Map.of("HOME", home.toString(), "KOSA8_API_KEY", KEY)::get).build();
+    eq("https://api.kosa8.com", c.baseUrl(), "env key wins, saved address unused");
+    Path empty = Files.createTempDirectory("kosa8-home");
+    var e = raises(Kosa8Exception.class, () -> Kosa8Cloud.builder().getenv(Map.of("HOME", empty.toString())::get).build());
+    check(e.getMessage().contains("kosa8 login"), e.getMessage());
+  }
+
+  public void testStarterLimit429IsPaymentRequired() throws Exception {
+    List<Answer> answers = new ArrayList<>(List.of(
+        new Answer(429, Map.of("error", "starter_limit", "message", "Starter runs 2 sandboxes at once"))));
+    try (Stub stub = new Stub(s -> answers.remove(0))) {
+      Kosa8Cloud cloud = stub.cloud();
+      var p = raises(Kosa8Exception.PaymentRequiredException.class, () -> cloud.sandboxes().create());
+      check(p instanceof Kosa8Exception.PlanLimitException, "a PlanLimitException");
+      eq("starter_limit", p.code(), "code");
+      eq(429, p.status(), "status");
+      check(!p.retryable(), "not retryable");
+    }
+  }
+
   public void testCloudSandboxLifecycle() throws Exception {
     try (Stub stub = new Stub(s -> {
       String u = s.path(), m = s.method();
