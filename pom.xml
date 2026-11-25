@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.kosa8</groupId>
   <artifactId>kosa8</artifactId>
-  <version>0.8.0</version>
+  <version>0.9.0</version>
   <packaging>jar</packaging>
   <name>kosa8</name>
   <description>Java SDK for kosa8: Zero Trust cybersecurity infrastructure for AI agents. No dependencies.</description>
